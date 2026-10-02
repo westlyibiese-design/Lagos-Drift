@@ -25,7 +25,21 @@ android {
         }
     }
 
+    // One fixed key for every build, so each new APK installs over the previous one
+    // and keeps its data. The keystore file lives next to this file in app/.
+    signingConfigs {
+        create("lagosdrift") {
+            storeFile = file("lagosdrift-debug.keystore")
+            storePassword = "android"
+            keyAlias = "lagosdrift"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("lagosdrift")
+        }
         release {
             isMinifyEnabled = false
         }
