@@ -24,6 +24,11 @@ class CarController {
     private var steerSmoothed = 0f
     private val forward = Vector3()
 
+    /** Called when the car hits a house or tree: multiplies the speed (0.5 = lose half). */
+    fun bump(factor: Float) {
+        speed *= factor
+    }
+
     /** steerInput: -1 = left, +1 = right. */
     fun update(delta: Float, steerInput: Float, throttle: Boolean, brake: Boolean) {
         val dt = min(delta, 0.05f)
@@ -60,12 +65,10 @@ class CarController {
         forward.set(0f, 0f, -1f).rotate(Vector3.Y, yawDegrees)
         position.mulAdd(forward, speed * dt)
 
-        // Stop at the edge of the ground.
-        if (position.x < -WORLD_LIMIT || position.x > WORLD_LIMIT ||
-            position.z < -WORLD_LIMIT || position.z > WORLD_LIMIT
-        ) {
-            position.x = position.x.coerceIn(-WORLD_LIMIT, WORLD_LIMIT)
-            position.z = position.z.coerceIn(-WORLD_LIMIT, WORLD_LIMIT)
+        // Stop at the edge of the drivable area (the beach is east of it).
+        if (position.x < MIN_X || position.x > MAX_X || position.z < MIN_Z || position.z > MAX_Z) {
+            position.x = position.x.coerceIn(MIN_X, MAX_X)
+            position.z = position.z.coerceIn(MIN_Z, MAX_Z)
             speed *= 0.5f
         }
     }
@@ -78,6 +81,9 @@ class CarController {
         const val REVERSE_ACCEL = 7f
         const val COAST_DECEL = 5f
         const val MAX_TURN_RATE = 80f    // degrees per second
-        const val WORLD_LIMIT = 280f
+        const val MIN_X = -280f
+        const val MAX_X = 150f
+        const val MIN_Z = -280f
+        const val MAX_Z = 280f
     }
 }

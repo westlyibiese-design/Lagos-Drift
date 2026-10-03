@@ -18,8 +18,8 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector3
 
 /**
- * Phase 2: drive the car with on-screen touch controls and a chase camera.
- * Ground, car and camera from Phase 1 are unchanged apart from the fixes noted in each file.
+ * Phase 3: drive the 6 GRIND around a small town (roads, houses, trees, beach, hills)
+ * with on-screen touch controls and a chase camera.
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -28,8 +28,10 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var environment: Environment
     private lateinit var groundModel: Model
     private lateinit var carModel: Model
+    private lateinit var townModel: Model
     private lateinit var groundInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
+    private lateinit var townInstance: ModelInstance
     private lateinit var spriteBatch: SpriteBatch
     private lateinit var shapeRenderer: ShapeRenderer
     private lateinit var font: BitmapFont
@@ -51,17 +53,20 @@ class LagosDriftGame : ApplicationAdapter() {
 
         camera = PerspectiveCamera(65f, width, height)
         camera.near = 1f
-        camera.far = 400f
+        camera.far = 700f
         chaseCamera = ChaseCamera(camera)
 
         environment = Environment()
         environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.60f, 1f))
         environment.add(DirectionalLight().set(0.90f, 0.88f, 0.80f, -0.6f, -1f, -0.4f))
+        environment.add(DirectionalLight().set(0.25f, 0.25f, 0.30f, 0.6f, -0.3f, 0.5f))
 
         modelBatch = ModelBatch()
         groundModel = GroundModelFactory.build()
+        townModel = TownModelFactory.build()
         carModel = CarModelFactory.build()
         groundInstance = ModelInstance(groundModel)
+        townInstance = ModelInstance(townModel)
         carInstance = ModelInstance(carModel)
 
         spriteBatch = SpriteBatch()
@@ -97,6 +102,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         controls.update()
         controller.update(delta, controls.steer, controls.throttle, controls.brake)
+        TownCollision.resolve(controller)
         carInstance.transform.setToRotation(Vector3.Y, controller.yawDegrees).setTranslation(controller.position)
         chaseCamera.update(controller.position, controller.yawDegrees, controller.speed, delta)
 
@@ -106,6 +112,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         modelBatch.begin(camera)
         modelBatch.render(groundInstance, environment)
+        modelBatch.render(townInstance, environment)
         modelBatch.render(carInstance, environment)
         modelBatch.end()
 
@@ -131,6 +138,7 @@ class LagosDriftGame : ApplicationAdapter() {
     override fun dispose() {
         modelBatch.dispose()
         groundModel.dispose()
+        townModel.dispose()
         carModel.dispose()
         spriteBatch.dispose()
         shapeRenderer.dispose()

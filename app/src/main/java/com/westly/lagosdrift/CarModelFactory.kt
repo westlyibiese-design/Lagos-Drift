@@ -1,66 +1,96 @@
 package com.westly.lagosdrift
 
 import com.badlogic.gdx.graphics.Color
-import com.badlogic.gdx.graphics.GL20
-import com.badlogic.gdx.graphics.VertexAttributes.Usage
-import com.badlogic.gdx.graphics.g3d.Material
 import com.badlogic.gdx.graphics.g3d.Model
-import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
-import com.badlogic.gdx.math.Matrix4
 import com.badlogic.gdx.math.Vector3
 
+/** The five colours from the 6 GRIND design sheet. */
+object CarPalette {
+    val BLACK = Color(0.08f, 0.08f, 0.09f, 1f)
+    val GREY = Color(0.27f, 0.28f, 0.31f, 1f)
+    val SILVER = Color(0.72f, 0.74f, 0.77f, 1f)
+    val RED = Color(0.70f, 0.08f, 0.10f, 1f)
+    val BLUE = Color(0.12f, 0.25f, 0.62f, 1f)
+}
+
 /**
- * Builds a simple low-poly yellow-and-black "danfo" style car from boxes and cylinders,
- * so Phase 1 needs no model files. The nose points along -Z. Replace with a real model later.
+ * A low-poly 6 GRIND sedan built from boxes and cylinders, so no model files are needed.
+ * The nose points along -Z. Pass another CarPalette colour to change the paint.
  */
 object CarModelFactory {
-    private val attributes = (Usage.Position or Usage.Normal).toLong()
+    private val glass = Color(0.10f, 0.14f, 0.18f, 1f)
+    private val trim = Color(0.05f, 0.05f, 0.06f, 1f)
+    private val lamp = Color(0.96f, 0.96f, 0.90f, 1f)
+    private val tail = Color(0.80f, 0.07f, 0.07f, 1f)
+    private val tyre = Color(0.07f, 0.07f, 0.08f, 1f)
+    private val rim = Color(0.58f, 0.60f, 0.64f, 1f)
+    private val accent = Color(0.85f, 0.10f, 0.10f, 1f)
 
-    fun build(): Model {
-        val builder = ModelBuilder()
-        builder.begin()
-        builder.node()
+    fun build(bodyColor: Color = CarPalette.GREY): Model {
+        val b = ModelBuilder()
+        b.begin()
+        b.node()
 
-        val yellow = Color(0.98f, 0.80f, 0.10f, 1f)
-        val black = Color(0.08f, 0.08f, 0.08f, 1f)
-        val glass = Color(0.15f, 0.20f, 0.26f, 1f)
-        val white = Color(0.97f, 0.97f, 0.90f, 1f)
-        val red = Color(0.80f, 0.08f, 0.08f, 1f)
+        // Paint: lower body, roof, hood panel, mirrors, pillars, boot spoiler.
+        val body = b.colorPart("body", bodyColor)
+        body.boxAt(0f, 0.625f, 0f, 1.85f, 0.55f, 4.8f)
+        body.boxAt(0f, 1.45f, 0.3f, 1.52f, 0.06f, 1.7f)
+        body.boxAt(0f, 0.93f, -1.2f, 1.5f, 0.06f, 1.6f)
+        body.boxAt(-0.98f, 1.0f, -0.55f, 0.12f, 0.1f, 0.22f)
+        body.boxAt(0.98f, 1.0f, -0.55f, 0.12f, 0.1f, 0.22f)
+        body.boxAt(-0.76f, 1.17f, 0.45f, 0.04f, 0.5f, 0.12f)
+        body.boxAt(0.76f, 1.17f, 0.45f, 0.04f, 0.5f, 0.12f)
+        body.boxAt(0f, 0.96f, 2.25f, 1.5f, 0.05f, 0.28f)
 
-        // Body, black side stripe and cabin.
-        box(builder, "body", yellow, 0f, 0.65f, 0f, 1.90f, 0.60f, 4.20f)
-        box(builder, "stripe", black, 0f, 0.65f, 0f, 1.92f, 0.12f, 4.22f)
-        box(builder, "cabin", glass, 0f, 1.225f, 0.20f, 1.60f, 0.55f, 2.00f)
+        // Glass: two leaning blocks make the sloped windscreen and rear window.
+        val windows = b.colorPart("glass", glass)
+        windows.slantedBoxAt(0f, 1.16f, -0.1f, 1.5f, 0.52f, 1.5f, 1.1538f)
+        windows.slantedBoxAt(0f, 1.16f, 0.7f, 1.5f, 0.52f, 1.6f, -1.346f)
 
-        // Headlights (front, -Z) and taillights (rear, +Z).
-        box(builder, "headL", white, -0.60f, 0.75f, -2.11f, 0.40f, 0.20f, 0.05f)
-        box(builder, "headR", white, 0.60f, 0.75f, -2.11f, 0.40f, 0.20f, 0.05f)
-        box(builder, "tailL", red, -0.60f, 0.75f, 2.11f, 0.40f, 0.20f, 0.05f)
-        box(builder, "tailR", red, 0.60f, 0.75f, 2.11f, 0.40f, 0.20f, 0.05f)
+        // Dark trim: grille, front splitter, rear diffuser.
+        val dark = b.colorPart("trim", trim)
+        dark.boxAt(0f, 0.62f, -2.41f, 1.1f, 0.26f, 0.06f)
+        dark.boxAt(0f, 0.40f, -2.35f, 1.75f, 0.08f, 0.18f)
+        dark.boxAt(0f, 0.40f, 2.38f, 1.5f, 0.1f, 0.15f)
 
-        // Four wheels.
-        wheel(builder, "wheelFL", black, -1.0f, 0.4f, -1.3f)
-        wheel(builder, "wheelFR", black, 1.0f, 0.4f, -1.3f)
-        wheel(builder, "wheelRL", black, -1.0f, 0.4f, 1.3f)
-        wheel(builder, "wheelRR", black, 1.0f, 0.4f, 1.3f)
+        // Headlights.
+        val heads = b.colorPart("headlights", lamp)
+        heads.boxAt(-0.65f, 0.80f, -2.41f, 0.5f, 0.09f, 0.06f)
+        heads.boxAt(0.65f, 0.80f, -2.41f, 0.5f, 0.09f, 0.06f)
 
-        return builder.end()
-    }
+        // Tail light strip across the back.
+        val tails = b.colorPart("taillights", tail)
+        tails.boxAt(0f, 0.80f, 2.41f, 1.4f, 0.08f, 0.06f)
+        tails.boxAt(-0.7f, 0.78f, 2.41f, 0.4f, 0.16f, 0.06f)
+        tails.boxAt(0.7f, 0.78f, 2.41f, 0.4f, 0.16f, 0.06f)
 
-    private fun box(
-        builder: ModelBuilder, id: String, color: Color,
-        x: Float, y: Float, z: Float, width: Float, height: Float, depth: Float
-    ) {
-        val part = builder.part(id, GL20.GL_TRIANGLES, attributes, Material(ColorAttribute.createDiffuse(color)))
-        part.setVertexTransform(Matrix4().setToTranslation(x, y, z))
-        part.box(width, height, depth)
-    }
+        // Wheels: tyres, silver rims, red centre caps.
+        val wheelX = 0.85f
+        val wheelY = 0.36f
+        val wheelZ = 1.5f
+        val tyres = b.colorPart("tyres", tyre)
+        for (sx in floatArrayOf(-1f, 1f)) {
+            for (sz in floatArrayOf(-1f, 1f)) {
+                tyres.cylinderAt(sx * wheelX, wheelY, sz * wheelZ, 0.72f, 0.26f, 20, Vector3.Z)
+            }
+        }
+        val rims = b.colorPart("rims", rim)
+        for (sx in floatArrayOf(-1f, 1f)) {
+            for (sz in floatArrayOf(-1f, 1f)) {
+                rims.cylinderAt(sx * wheelX, wheelY, sz * wheelZ, 0.46f, 0.28f, 16, Vector3.Z)
+            }
+        }
+        // Twin exhaust tips share the rim colour.
+        rims.cylinderAt(-0.55f, 0.32f, 2.45f, 0.13f, 0.25f, 10, Vector3.X)
+        rims.cylinderAt(0.55f, 0.32f, 2.45f, 0.13f, 0.25f, 10, Vector3.X)
+        val caps = b.colorPart("caps", accent)
+        for (sx in floatArrayOf(-1f, 1f)) {
+            for (sz in floatArrayOf(-1f, 1f)) {
+                caps.cylinderAt(sx * wheelX, wheelY, sz * wheelZ, 0.14f, 0.32f, 8, Vector3.Z)
+            }
+        }
 
-    private fun wheel(builder: ModelBuilder, id: String, color: Color, x: Float, y: Float, z: Float) {
-        val part = builder.part(id, GL20.GL_TRIANGLES, attributes, Material(ColorAttribute.createDiffuse(color)))
-        // A cylinder stands along Y by default; turn it onto its side so it rolls forward.
-        part.setVertexTransform(Matrix4().setToTranslation(x, y, z).rotate(Vector3.Z, 90f))
-        part.cylinder(0.8f, 0.35f, 0.8f, 16)
+        return b.end()
     }
 }
