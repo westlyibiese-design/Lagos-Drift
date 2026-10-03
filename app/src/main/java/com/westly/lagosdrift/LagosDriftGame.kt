@@ -18,8 +18,8 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector3
 
 /**
- * Phase 3: drive the 6 GRIND around a small town (roads, houses, trees, beach, hills)
- * with on-screen touch controls and a chase camera.
+ * Phase 3B: drive the 6 GRIND around a colourful town with people walking about.
+ * Map and small map, four camera views and zoom, all with on-screen touch buttons.
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -27,11 +27,13 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var modelBatch: ModelBatch
     private lateinit var environment: Environment
     private lateinit var groundModel: Model
-    private lateinit var carModel: Model
     private lateinit var townModel: Model
+    private lateinit var carModel: Model
+    private lateinit var pedestrianModels: List<Model>
     private lateinit var groundInstance: ModelInstance
-    private lateinit var carInstance: ModelInstance
     private lateinit var townInstance: ModelInstance
+    private lateinit var carInstance: ModelInstance
+    private lateinit var crowd: PedestrianCrowd
     private lateinit var spriteBatch: SpriteBatch
     private lateinit var shapeRenderer: ShapeRenderer
     private lateinit var font: BitmapFont
@@ -39,13 +41,21 @@ class LagosDriftGame : ApplicationAdapter() {
     private val glyphLayout = GlyphLayout()
     private val controller = CarController()
     private val controls = TouchControls()
+    private val mapRenderer = MapRenderer()
 
     private val copyrightText = "(c) Neribo Group"
+    private var viewMode = ChaseCamera.MODE_NEAR
+    private var viewLabelTimer = 0f
+    private var mapOpen = false
+
     private var screenWidth = 1f
     private var screenHeight = 1f
     private var safeRight = 0f
     private var margin = 0f
     private var textScale = 1f
+    private var miniX = 0f
+    private var miniY = 0f
+    private var miniSize = 0f
 
     override fun create() {
         val width = Gdx.graphics.width.toFloat()
@@ -65,9 +75,11 @@ class LagosDriftGame : ApplicationAdapter() {
         groundModel = GroundModelFactory.build()
         townModel = TownModelFactory.build()
         carModel = CarModelFactory.build()
+        pedestrianModels = PedestrianModelFactory.buildAll()
         groundInstance = ModelInstance(groundModel)
         townInstance = ModelInstance(townModel)
         carInstance = ModelInstance(carModel)
+        crowd = PedestrianCrowd(pedestrianModels)
 
         spriteBatch = SpriteBatch()
         shapeRenderer = ShapeRenderer()
@@ -95,16 +107,38 @@ class LagosDriftGame : ApplicationAdapter() {
         val safeLeft = Gdx.graphics.safeInsetLeft.toFloat()
         safeRight = Gdx.graphics.safeInsetRight.toFloat()
         controls.layout(width, height, safeLeft, safeRight)
+
+        // Small map in the top-left corner.
+        miniSize = screenHeight * 0.36f
+        miniX = safeLeft + margin
+        miniY = screenHeight - margin - miniSize
     }
 
     override fun render() {
         val delta = Gdx.graphics.deltaTime
 
         controls.update()
-        controller.update(delta, controls.steer, controls.throttle, controls.brake)
-        TownCollision.resolve(controller)
+        if (controls.mapTapped) mapOpen = !mapOpen
+        if (controls.cameraTapped) {
+            viewMode = (viewMode + 1) % ChaseCamera.MODE_COUNT
+            viewLabelTimer = 1.8f
+        }
+        if (viewLabelTimer > 0f) viewLabelTimer -= delta
+
+        // Zoom: pinch, or hold + / -.
+        var zoom = chaseCamera.zoom * controls.pinchRatio
+        if (controls.zoomInHeld) zoom *= 1f - 0.8f * delta
+        if (controls.zoomOutHeld) zoom *= 1f + 0.8f * delta
+        chaseCamera.zoom = zoom.coerceIn(0.5f, 2.5f)
+
+        // The game pauses while the big map is open.
+        if (!mapOpen) {
+            controller.update(delta, controls.steer, controls.throttle, controls.brake)
+            TownCollision.resolve(controller)
+            crowd.update(delta)
+        }
         carInstance.transform.setToRotation(Vector3.Y, controller.yawDegrees).setTranslation(controller.position)
-        chaseCamera.update(controller.position, controller.yawDegrees, controller.speed, delta)
+        chaseCamera.update(controller.position, controller.yawDegrees, controller.speed, delta, viewMode)
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
         Gdx.gl.glClearColor(0.53f, 0.81f, 0.92f, 1f)
@@ -113,12 +147,32 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch.begin(camera)
         modelBatch.render(groundInstance, environment)
         modelBatch.render(townInstance, environment)
+        crowd.render(modelBatch, environment, controller.position)
         modelBatch.render(carInstance, environment)
         modelBatch.end()
 
-        // Touch buttons.
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+
+        if (mapOpen) {
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
+            mapRenderer.drawFull(shapeRenderer, controller.position, controller.yawDegrees, screenWidth, screenHeight)
+            shapeRenderer.end()
+        } else {
+            // The small map is cut off at its edges with a scissor box.
+            Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
+            mapRenderer.drawMini(shapeRenderer, controller.position, controller.yawDegrees, miniX, miniY, miniSize)
+            shapeRenderer.end()
+            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
+            mapRenderer.drawFrame(shapeRenderer, miniX, miniY, miniSize)
+            shapeRenderer.end()
+        }
+
+        // Touch buttons.
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
         controls.drawShapes(shapeRenderer)
         shapeRenderer.end()
@@ -132,6 +186,15 @@ class LagosDriftGame : ApplicationAdapter() {
 
         glyphLayout.setText(font, copyrightText)
         font.draw(spriteBatch, glyphLayout, screenWidth - safeRight - margin - glyphLayout.width, screenHeight - margin)
+
+        if (viewLabelTimer > 0f) {
+            glyphLayout.setText(font, "Camera: ${ChaseCamera.MODE_NAMES[viewMode]}")
+            font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
+        }
+        if (mapOpen) {
+            glyphLayout.setText(font, "MAP   (tap MAP to close)")
+            font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
+        }
         spriteBatch.end()
     }
 
@@ -140,6 +203,7 @@ class LagosDriftGame : ApplicationAdapter() {
         groundModel.dispose()
         townModel.dispose()
         carModel.dispose()
+        for (m in pedestrianModels) m.dispose()
         spriteBatch.dispose()
         shapeRenderer.dispose()
         font.dispose()

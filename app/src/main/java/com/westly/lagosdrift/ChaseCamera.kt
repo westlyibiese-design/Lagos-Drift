@@ -1,42 +1,82 @@
 package com.westly.lagosdrift
 
 import com.badlogic.gdx.graphics.PerspectiveCamera
+import com.badlogic.gdx.math.MathUtils
 import com.badlogic.gdx.math.Vector3
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
-/** Follows the car from behind and above. Turns a little late and pulls back at speed. */
+/**
+ * Four views of the car: near chase, far chase, hood (inside the car) and a slow orbit.
+ * Pinch or the + and - buttons change zoom in every view except the hood view.
+ */
 class ChaseCamera(private val camera: PerspectiveCamera) {
-    var baseDistance = 8.5f
-    var height = 3.6f
-    var lookAhead = 4f
+    /** 1 = normal. Smaller is closer. */
+    var zoom = 1f
 
     private var cameraYaw = 0f
+    private var orbitAngle = 0f
     private var started = false
     private val forward = Vector3()
     private val lookTarget = Vector3()
 
-    fun update(carPosition: Vector3, carYawDegrees: Float, speed: Float, delta: Float) {
+    fun update(carPosition: Vector3, carYawDegrees: Float, speed: Float, delta: Float, mode: Int) {
         if (!started) {
             cameraYaw = carYawDegrees
             started = true
         }
 
-        // Ease the camera heading toward the car heading, the short way round.
-        var diff = (carYawDegrees - cameraYaw) % 360f
-        if (diff > 180f) diff -= 360f
-        if (diff < -180f) diff += 360f
-        cameraYaw += diff * min(1f, 4f * delta)
+        when (mode) {
+            MODE_HOOD -> {
+                cameraYaw = carYawDegrees
+                camera.fieldOfView = 72f
+                forward.set(0f, 0f, -1f).rotate(Vector3.Y, carYawDegrees)
+                camera.position.set(carPosition).mulAdd(forward, -0.15f)
+                camera.position.y = 1.3f
+                lookTarget.set(carPosition).mulAdd(forward, 20f)
+                lookTarget.y = 1.2f
+            }
+            MODE_ORBIT -> {
+                cameraYaw = carYawDegrees
+                camera.fieldOfView = 65f
+                orbitAngle += 28f * delta
+                val a = orbitAngle * MathUtils.degreesToRadians
+                val d = 9.5f * zoom
+                camera.position.set(carPosition.x + sin(a) * d, 3.2f * zoom + 0.8f, carPosition.z + cos(a) * d)
+                lookTarget.set(carPosition).add(0f, 1f, 0f)
+            }
+            else -> {
+                camera.fieldOfView = 65f
+                val baseDistance = if (mode == MODE_FAR) 15f else 8.5f
+                val height = if (mode == MODE_FAR) 6.5f else 3.6f
 
-        val distance = baseDistance + abs(speed) * 0.08f
-        forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
+                // Ease the camera heading toward the car heading, the short way round.
+                var diff = (carYawDegrees - cameraYaw) % 360f
+                if (diff > 180f) diff -= 360f
+                if (diff < -180f) diff += 360f
+                cameraYaw += diff * min(1f, 4f * delta)
 
-        camera.position.set(carPosition).mulAdd(forward, -distance)
-        camera.position.y += height
+                val distance = (baseDistance + abs(speed) * 0.08f) * zoom
+                forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
+                camera.position.set(carPosition).mulAdd(forward, -distance)
+                camera.position.y += height * zoom
+                lookTarget.set(carPosition).add(0f, 1f, 0f).mulAdd(forward, 4f)
+            }
+        }
 
-        lookTarget.set(carPosition).add(0f, 1f, 0f).mulAdd(forward, lookAhead)
         camera.up.set(Vector3.Y)
         camera.lookAt(lookTarget)
         camera.update()
+    }
+
+    companion object {
+        const val MODE_NEAR = 0
+        const val MODE_FAR = 1
+        const val MODE_HOOD = 2
+        const val MODE_ORBIT = 3
+        const val MODE_COUNT = 4
+        val MODE_NAMES = arrayOf("Near", "Far", "Hood", "Orbit")
     }
 }
