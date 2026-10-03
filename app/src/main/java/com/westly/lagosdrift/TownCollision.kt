@@ -6,8 +6,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Stops the car going through houses and trees. The car is treated as two circles,
- * one near the nose and one near the tail. Hitting something slows the car right down.
+ * Stops the car going through houses, market stalls and trees. The car is treated as two circles,
+ * one near the nose and one near the tail. Hitting something slows the car right down. Only the
+ * chunks around the car are checked.
  */
 object TownCollision {
     private const val RADIUS = 1.1f
@@ -24,8 +25,21 @@ object TownCollision {
 
     private fun pushOut(car: CarController, ox: Float, oz: Float) {
         val p = car.position
+        val cx0 = TownLayout.cxOf(p.x)
+        val cz0 = TownLayout.czOf(p.z)
 
-        for (h in TownLayout.houses) {
+        for (dz in -1..1) {
+            for (dx in -1..1) {
+                val chunk = TownLayout.chunkAt(cx0 + dx, cz0 + dz) ?: continue
+                pushOutOfHouses(car, chunk, ox, oz)
+                pushOutOfTrees(car, chunk, ox, oz)
+            }
+        }
+    }
+
+    private fun pushOutOfHouses(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float) {
+        val p = car.position
+        for (h in chunk.houses) {
             val cx = p.x + ox
             val cz = p.z + oz
             val nearX = cx.coerceIn(h.cx - h.hw, h.cx + h.hw)
@@ -41,7 +55,7 @@ object TownCollision {
                 p.x += dx / d * push
                 p.z += dz / d * push
             } else {
-                // The circle centre is inside the house: leave by the shortest way.
+                // The circle centre is inside the building: leave by the shortest way.
                 val left = cx - (h.cx - h.hw)
                 val right = (h.cx + h.hw) - cx
                 val back = cz - (h.cz - h.hd)
@@ -54,10 +68,14 @@ object TownCollision {
                     else -> p.z = h.cz + h.hd + RADIUS - oz
                 }
             }
-            car.bump(0.5f)
+            // A market stall gives way more than a wall does.
+            car.bump(if (h.type == TownLayout.TYPE_STALL) 0.75f else 0.5f)
         }
+    }
 
-        for (t in TownLayout.trees) {
+    private fun pushOutOfTrees(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float) {
+        val p = car.position
+        for (t in chunk.trees) {
             val dx = p.x + ox - t.x
             val dz = p.z + oz - t.z
             val d2 = dx * dx + dz * dz

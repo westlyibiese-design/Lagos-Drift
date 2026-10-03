@@ -27,6 +27,9 @@ class TouchControls {
     var mapTapped = false
         private set
 
+    /** While the big map is open only the MAP button is shown and used; the map reads the other touches. */
+    var mapMode = false
+
     var zoomInHeld = false
         private set
     var zoomOutHeld = false
@@ -68,6 +71,10 @@ class TouchControls {
     private val allButtons = listOf(
         leftButton, rightButton, gasButton, brakeButton, mapButton, cameraButton, zoomInButton, zoomOutButton
     )
+
+    private val mapOnly = listOf(mapButton)
+    private val active: List<Button>
+        get() = if (mapMode) mapOnly else allButtons
 
     private var cameraWasDown = false
     private var mapWasDown = false
@@ -114,7 +121,7 @@ class TouchControls {
             val px = Gdx.input.getX(pointer).toFloat()
             val py = screenHeight - Gdx.input.getY(pointer).toFloat()
             var onButton = false
-            for (button in allButtons) {
+            for (button in active) {
                 if (button.contains(px, py)) {
                     button.pressed = true
                     onButton = true
@@ -158,8 +165,12 @@ class TouchControls {
         mapWasDown = mapButton.pressed
     }
 
+    /** True if a screen point (y up) is on a button that is currently shown. */
+    fun hitsButton(px: Float, py: Float): Boolean = active.any { it.contains(px, py) }
+
     fun drawShapes(shapes: ShapeRenderer) {
-        for (button in allButtons) circle(shapes, button)
+        for (button in active) circle(shapes, button)
+        if (mapMode) return
 
         // Steering arrows.
         shapes.setColor(1f, 1f, 1f, 0.85f)
@@ -178,6 +189,13 @@ class TouchControls {
 
     fun drawLabels(batch: SpriteBatch, font: BitmapFont, layout: GlyphLayout, textScale: Float) {
         font.setColor(1f, 1f, 1f, 0.9f)
+        if (mapMode) {
+            font.data.setScale(textScale * 1.1f)
+            label(batch, font, layout, mapButton)
+            font.data.setScale(textScale)
+            font.setColor(1f, 1f, 1f, 0.8f)
+            return
+        }
         font.data.setScale(textScale * 1.4f)
         label(batch, font, layout, gasButton)
         label(batch, font, layout, brakeButton)

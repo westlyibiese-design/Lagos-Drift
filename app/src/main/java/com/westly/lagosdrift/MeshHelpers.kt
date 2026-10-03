@@ -14,9 +14,21 @@ import com.badlogic.gdx.math.Vector3
 
 internal val POSITION_NORMAL: Long = (Usage.Position or Usage.Normal).toLong()
 
+/** Position, normal and a colour stored in every vertex (used by the world chunks). */
+internal val POSITION_NORMAL_COLOR: Long =
+    (Usage.Position or Usage.Normal or Usage.ColorPacked).toLong()
+
 /** Starts a new single-colour part. Finish adding shapes to one part before starting the next. */
 internal fun ModelBuilder.colorPart(id: String, color: Color): MeshPartBuilder =
     part(id, GL20.GL_TRIANGLES, POSITION_NORMAL, Material(ColorAttribute.createDiffuse(color)))
+
+/**
+ * Starts a new part whose colour comes from each vertex instead of the material. Call setColor()
+ * on the part before every shape. Many colours then cost one draw call. Keep each part well under
+ * 60000 vertices (start a new part every few buildings).
+ */
+internal fun ModelBuilder.vertexPart(id: String): MeshPartBuilder =
+    part(id, GL20.GL_TRIANGLES, POSITION_NORMAL_COLOR, Material(ColorAttribute.createDiffuse(Color.WHITE)))
 
 internal fun MeshPartBuilder.boxAt(x: Float, y: Float, z: Float, width: Float, height: Float, depth: Float) {
     setVertexTransform(Matrix4().setToTranslation(x, y, z))
