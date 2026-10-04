@@ -36,6 +36,37 @@ object TrafficModelFactory {
     private val tyre = Color(0.07f, 0.07f, 0.08f, 1f)
     private val rim = Color(0.58f, 0.60f, 0.64f, 1f)
 
+    const val DANFO_DOOR_NODE = "danfoDoor"
+    private const val DOOR_HINGE_X = -1.06f
+    private const val DOOR_HINGE_Z = -1.76f
+
+    /**
+     * The danfo's driver's door, drawn on top of the baked bus model. It is a yellow panel with a
+     * black stripe and a dark window, hinged at its front edge, plus a dark doorway on the bus
+     * that shows when it swings open. The bus model itself is one solid piece, so this stands in.
+     */
+    fun buildDanfoDoor(): Model {
+        val b = ModelBuilder()
+        b.begin()
+        b.node()
+        // The doorway: a dark box lying just outside the bus side (the door covers it when shut).
+        val doorway = b.colorPart("danfoDoorway", Color(0.05f, 0.05f, 0.06f, 1f))
+        doorway.boxAt(-1.05f, 1.2f, -1.28f, 0.02f, 1.3f, 0.96f)
+
+        val node = b.node()
+        node.id = DANFO_DOOR_NODE
+        node.translation.set(DOOR_HINGE_X, 0f, DOOR_HINGE_Z)
+        val paint = b.colorPart("danfoDoorPaint", danfoYellow)
+        paint.boxAt(-0.02f, 0.90f, 0.48f, 0.04f, 0.70f, 0.96f)
+        val glassPart = b.colorPart("danfoDoorGlass", glass)
+        glassPart.boxAt(-0.02f, 1.55f, 0.48f, 0.04f, 0.60f, 0.96f)
+        val stripePart = b.colorPart("danfoDoorStripe", danfoBlack)
+        stripePart.boxAt(-0.03f, 0.95f, 0.48f, 0.04f, 0.20f, 0.96f)
+        val handle = b.colorPart("danfoDoorHandle", rim)
+        handle.boxAt(-0.05f, 1.15f, 0.82f, 0.04f, 0.05f, 0.16f)
+        return b.end()
+    }
+
     /**
      * The danfo: your own art (assets/traffic/danfo.bin and danfo.jpg). If those files are missing
      * or cannot be read, the simple box-built danfo below is used instead.
