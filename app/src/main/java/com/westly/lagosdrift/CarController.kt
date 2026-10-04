@@ -12,7 +12,11 @@ import kotlin.math.sin
  * and lose speed. No physics engine yet. The nose points along -Z at yaw 0, and a positive yaw
  * turns left.
  */
-class CarController {
+class CarController(
+    private val topSpeed: Float = 30f,
+    private val accel: Float = 11f,
+    private val turnRate: Float = 80f
+) {
     val position = Vector3(0f, 0f, 265f)
 
     var yawDegrees = 0f
@@ -44,6 +48,15 @@ class CarController {
     private var lastFrontHole: TownLayout.Pothole? = null
     private var lastRearHole: TownLayout.Pothole? = null
 
+    /** Parks the vehicle somewhere, facing a direction, standing still. */
+    fun place(x: Float, z: Float, yaw: Float) {
+        position.set(x, 0f, z)
+        yawDegrees = yaw
+        speed = 0f
+        steerSmoothed = 0f
+        bounceHeight = 0f
+    }
+
     /** Called when the car hits a house or tree: multiplies the speed (0.5 = lose half). */
     fun bump(factor: Float) {
         speed *= factor
@@ -59,7 +72,7 @@ class CarController {
             speed += if (speed < 0f) {
                 BRAKE_DECEL * dt
             } else {
-                ACCEL * dt * (1f - 0.8f * (speed / MAX_SPEED).coerceIn(0f, 1f))
+                accel * dt * (1f - 0.8f * (speed / topSpeed).coerceIn(0f, 1f))
             }
         } else if (brake && !throttle) {
             speed -= if (speed > 0.1f) BRAKE_DECEL * dt else REVERSE_ACCEL * dt
@@ -71,7 +84,7 @@ class CarController {
                 else -> 0f
             }
         }
-        speed = speed.coerceIn(-MAX_REVERSE, MAX_SPEED)
+        speed = speed.coerceIn(-MAX_REVERSE, topSpeed)
 
         // The road underneath slows the car: grass most, then dirt, then broken tarmac.
         surface = RoadSurface.surfaceAt(position.x, position.z)
@@ -86,9 +99,9 @@ class CarController {
         // Steering: smoothed, weaker when slow and when very fast, flipped when reversing.
         steerSmoothed += (steerInput - steerSmoothed) * min(1f, 8f * dt)
         val speedAbs = abs(speed)
-        val grip = (speedAbs / 4f).coerceIn(0f, 1f) * (1f - 0.5f * (speedAbs / MAX_SPEED).coerceIn(0f, 1f))
+        val grip = (speedAbs / 4f).coerceIn(0f, 1f) * (1f - 0.5f * (speedAbs / topSpeed).coerceIn(0f, 1f))
         val direction = if (speed >= 0f) 1f else -1f
-        yawDegrees -= steerSmoothed * MAX_TURN_RATE * grip * direction * dt
+        yawDegrees -= steerSmoothed * turnRate * grip * direction * dt
         if (yawDegrees > 180f) yawDegrees -= 360f
         if (yawDegrees < -180f) yawDegrees += 360f
 
@@ -137,13 +150,10 @@ class CarController {
     }
 
     private companion object {
-        const val MAX_SPEED = 30f        // about 108 km/h
         const val MAX_REVERSE = 9f
-        const val ACCEL = 11f
         const val BRAKE_DECEL = 24f
         const val REVERSE_ACCEL = 7f
         const val COAST_DECEL = 5f
-        const val MAX_TURN_RATE = 80f    // degrees per second
         const val WHEEL_OFFSET = 1.5f
         const val WHEEL_REACH = 0.35f
     }

@@ -15,15 +15,16 @@ object TownCollision {
     private const val OFFSET = 1.2f
     private const val TRUNK_RADIUS = 0.5f
 
-    fun resolve(car: CarController) {
+    /** [radius] and [offset] describe the vehicle: two circles of that radius, that far from the middle. */
+    fun resolve(car: CarController, radius: Float = RADIUS, offset: Float = OFFSET) {
         val rad = car.yawDegrees * MathUtils.degreesToRadians
-        val ox = -sin(rad) * OFFSET
-        val oz = -cos(rad) * OFFSET
-        pushOut(car, ox, oz)
-        pushOut(car, -ox, -oz)
+        val ox = -sin(rad) * offset
+        val oz = -cos(rad) * offset
+        pushOut(car, ox, oz, radius)
+        pushOut(car, -ox, -oz, radius)
     }
 
-    private fun pushOut(car: CarController, ox: Float, oz: Float) {
+    private fun pushOut(car: CarController, ox: Float, oz: Float, radius: Float) {
         val p = car.position
         val cx0 = TownLayout.cxOf(p.x)
         val cz0 = TownLayout.czOf(p.z)
@@ -31,13 +32,13 @@ object TownCollision {
         for (dz in -1..1) {
             for (dx in -1..1) {
                 val chunk = TownLayout.chunkAt(cx0 + dx, cz0 + dz) ?: continue
-                pushOutOfHouses(car, chunk, ox, oz)
-                pushOutOfTrees(car, chunk, ox, oz)
+                pushOutOfHouses(car, chunk, ox, oz, radius)
+                pushOutOfTrees(car, chunk, ox, oz, radius)
             }
         }
     }
 
-    private fun pushOutOfHouses(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float) {
+    private fun pushOutOfHouses(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float, radius: Float) {
         val p = car.position
         for (h in chunk.houses) {
             val cx = p.x + ox
@@ -47,11 +48,11 @@ object TownCollision {
             val dx = cx - nearX
             val dz = cz - nearZ
             val d2 = dx * dx + dz * dz
-            if (d2 >= RADIUS * RADIUS) continue
+            if (d2 >= radius * radius) continue
 
             if (d2 > 0.0001f) {
                 val d = sqrt(d2)
-                val push = RADIUS - d
+                val push = radius - d
                 p.x += dx / d * push
                 p.z += dz / d * push
             } else {
@@ -62,10 +63,10 @@ object TownCollision {
                 val front = (h.cz + h.hd) - cz
                 val m = minOf(minOf(left, right), minOf(back, front))
                 when (m) {
-                    left -> p.x = h.cx - h.hw - RADIUS - ox
-                    right -> p.x = h.cx + h.hw + RADIUS - ox
-                    back -> p.z = h.cz - h.hd - RADIUS - oz
-                    else -> p.z = h.cz + h.hd + RADIUS - oz
+                    left -> p.x = h.cx - h.hw - radius - ox
+                    right -> p.x = h.cx + h.hw + radius - ox
+                    back -> p.z = h.cz - h.hd - radius - oz
+                    else -> p.z = h.cz + h.hd + radius - oz
                 }
             }
             // A market stall gives way more than a wall does.
@@ -73,13 +74,13 @@ object TownCollision {
         }
     }
 
-    private fun pushOutOfTrees(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float) {
+    private fun pushOutOfTrees(car: CarController, chunk: TownLayout.Chunk, ox: Float, oz: Float, radius: Float) {
         val p = car.position
         for (t in chunk.trees) {
             val dx = p.x + ox - t.x
             val dz = p.z + oz - t.z
             val d2 = dx * dx + dz * dz
-            val limit = RADIUS + TRUNK_RADIUS * t.scale
+            val limit = radius + TRUNK_RADIUS * t.scale
             if (d2 >= limit * limit) continue
 
             val d = maxOf(sqrt(d2), 0.001f)
@@ -141,13 +142,14 @@ object TownCollision {
 
     /** Keeps a walking person out of a car (the car is two circles, like in resolve). */
     fun pushOutOfCar(
-        p: com.badlogic.gdx.math.Vector3, radius: Float, carPos: com.badlogic.gdx.math.Vector3, carYaw: Float
+        p: com.badlogic.gdx.math.Vector3, radius: Float, carPos: com.badlogic.gdx.math.Vector3, carYaw: Float,
+        carRadius: Float = RADIUS, carOffset: Float = OFFSET
     ) {
         val rad = carYaw * MathUtils.degreesToRadians
-        val ox = -sin(rad) * OFFSET
-        val oz = -cos(rad) * OFFSET
-        pushOutOfCircle(p, radius, carPos.x + ox, carPos.z + oz, RADIUS)
-        pushOutOfCircle(p, radius, carPos.x - ox, carPos.z - oz, RADIUS)
+        val ox = -sin(rad) * carOffset
+        val oz = -cos(rad) * carOffset
+        pushOutOfCircle(p, radius, carPos.x + ox, carPos.z + oz, carRadius)
+        pushOutOfCircle(p, radius, carPos.x - ox, carPos.z - oz, carRadius)
     }
 
     /** Pushes the person out of one circle. Used for cars, parked or driving. */

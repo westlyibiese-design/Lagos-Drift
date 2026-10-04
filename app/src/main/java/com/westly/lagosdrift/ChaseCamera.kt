@@ -19,6 +19,10 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
     /** Extra closeness for the walking player (about 0.4); 1 when driving. */
     var distanceScale = 1f
 
+    /** Where the hood (driver's) view sits: metres behind the vehicle's middle, and height. */
+    var hoodBack = 0.15f
+    var hoodHeight = 1.3f
+
     /** While walking the camera keeps its own heading, so the stick can be read relative to the view. */
     var freeLook = false
 
@@ -50,8 +54,8 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 if (!freeLook) cameraYaw = carYawDegrees
                 camera.fieldOfView = 72f
                 forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
-                camera.position.set(carPosition).mulAdd(forward, -0.15f)
-                camera.position.y = 1.3f
+                camera.position.set(carPosition).mulAdd(forward, -hoodBack)
+                camera.position.y = hoodHeight
                 lookTarget.set(carPosition).mulAdd(forward, 20f)
                 lookTarget.y = 1.2f
             }

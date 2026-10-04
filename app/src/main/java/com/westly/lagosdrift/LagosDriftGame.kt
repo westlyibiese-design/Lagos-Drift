@@ -18,9 +18,10 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector3
 
 /**
- * Phase 5: drive the 6 GRIND around Ikoyi (south) and Ikorodu (north), get out of the car and walk
- * as your own character, get back in, and share the road with other cars and danfo buses.
- * The world is built in 100 m chunks around whoever the camera follows (the car, or the walker).
+ * Phase 6: drive the 6 GRIND around Ikoyi (south) and Ikorodu (north), get out and walk as your own
+ * character, or drive your own danfo in Ikorodu: stop at the bus stops, take passengers, drop them
+ * at their stop and earn fares. Other cars and danfos share the road.
+ * The world is built in 100 m chunks around whoever the camera follows (a vehicle, or the walker).
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -34,6 +35,9 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var playerInstance: ModelInstance
     private lateinit var groundInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
+    private lateinit var danfoModel: Model
+    private lateinit var danfoInstance: ModelInstance
+    private lateinit var job: DanfoJob
     private lateinit var crowd: PedestrianCrowd
     private lateinit var chunks: ChunkManager
     private lateinit var spriteBatch: SpriteBatch
@@ -41,7 +45,13 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var font: BitmapFont
 
     private val glyphLayout = GlyphLayout()
-    private val controller = CarController()
+    private val grind = CarController()
+    private val danfo = CarController(topSpeed = 22f, accel = 6f, turnRate = 62f)
+
+    /** The vehicle you are driving, or the one you drove last while you walk. */
+    private var controller: CarController = grind
+    private val vehiclePositions = listOf(grind.position, danfo.position)
+    private val parkedMarkers = ArrayList<Vector3>()
     private val player = PlayerController()
     private val traffic = TrafficManager()
     private val controls = TouchControls()
@@ -95,12 +105,18 @@ class LagosDriftGame : ApplicationAdapter() {
         pedestrianModels = PedestrianModelFactory.buildAll()
         groundInstance = ModelInstance(groundModel)
         carInstance = ModelInstance(carModel)
+        danfoModel = TrafficModelFactory.buildDanfo()
+        danfoInstance = ModelInstance(danfoModel)
+        job = DanfoJob(pedestrianModels)
+        // Your danfo waits in Ikorodu, 40 m north of the border road, facing north.
+        danfo.place(3f, -40f, 0f)
         crowd = PedestrianCrowd(pedestrianModels)
         playerModel = PlayerModelFactory.load()
         playerInstance = ModelInstance(playerModel)
         traffic.create()
         focus.set(controller.position)
-        traffic.populate(focus, controller.position)
+        traffic.populate(focus, vehiclePositions)
+        showHint("Your danfo is parked in Ikorodu - find the yellow square on the map", 8f)
 
         chunks = ChunkManager()
         chunks.preload(controller.position.x, controller.position.z)
@@ -165,14 +181,15 @@ class LagosDriftGame : ApplicationAdapter() {
         if (viewLabelTimer > 0f) viewLabelTimer -= delta
         if (hintTimer > 0f) hintTimer -= delta
 
-        // Get out of the car, or back in.
+        // Get out of the vehicle, or back in.
         if (controls.actionTapped && !mapOpen) {
             if (!onFoot) {
                 if (kotlin.math.abs(controller.speed) < EXIT_MAX_SPEED) {
+                    val side = if (controller === danfo) DANFO_EXIT_SIDE else CAR_EXIT_SIDE
                     tmp.set(0f, 0f, -1f).rotate(Vector3.Y, controller.yawDegrees + 90f)
                     player.place(
-                        controller.position.x + tmp.x * 2.4f,
-                        controller.position.z + tmp.z * 2.4f,
+                        controller.position.x + tmp.x * side,
+                        controller.position.z + tmp.z * side,
                         controller.yawDegrees
                     )
                     TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
@@ -180,20 +197,22 @@ class LagosDriftGame : ApplicationAdapter() {
                     hasWalkTarget = false
                     chaseCamera.freeLook = true
                     controls.setOnFoot(true)
-                    showHint("Stick = walk, JUMP = jump, double-tap = walk there. ENTER at your car")
+                    showHint("Stick = walk, JUMP = jump, double-tap = walk there. ENTER next to a vehicle")
                 } else {
                     showHint("Slow down to get out")
                 }
             } else {
-                val dx = player.position.x - controller.position.x
-                val dz = player.position.z - controller.position.z
-                if (dx * dx + dz * dz <= ENTER_RANGE * ENTER_RANGE) {
+                val pick = nearestVehicleInReach()
+                if (pick != null) {
+                    controller = pick
                     onFoot = false
                     hasWalkTarget = false
                     chaseCamera.freeLook = false
                     controls.setOnFoot(false)
+                    applyVehicleCamera()
+                    if (pick === danfo) showHint("Danfo: stop at the orange bus stops to pick up people")
                 } else {
-                    showHint("Too far from your car")
+                    showHint("Too far from a vehicle")
                 }
             }
         }
@@ -207,20 +226,27 @@ class LagosDriftGame : ApplicationAdapter() {
 
         // The game pauses while the big map is open.
         if (!mapOpen) {
-            if (onFoot) {
-                // The car rolls to a stop by itself (no brake, so it never reverses).
-                controller.update(delta, 0f, false, false)
-                walkOnFoot(delta)
-            } else {
-                controller.update(delta, controls.steer, controls.throttle, controls.brake)
+            // The vehicle you drive gets your controls; the other one just rolls to a stop.
+            for (v in arrayOf(grind, danfo)) {
+                if (!onFoot && v === controller) {
+                    v.update(delta, controls.steer, controls.throttle, controls.brake)
+                } else {
+                    v.update(delta, 0f, false, false)
+                }
+                TownCollision.resolve(v, radiusOf(v), offsetOf(v))
+                traffic.collide(v, offsetOf(v), radiusOf(v))
             }
-            TownCollision.resolve(controller)
-            traffic.collide(controller)
             if (onFoot) {
+                walkOnFoot(delta)
                 TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
-                TownCollision.pushOutOfCar(player.position, PLAYER_RADIUS, controller.position, controller.yawDegrees)
+                for (v in arrayOf(grind, danfo)) {
+                    TownCollision.pushOutOfCar(
+                        player.position, PLAYER_RADIUS, v.position, v.yawDegrees, radiusOf(v), offsetOf(v)
+                    )
+                }
                 traffic.pushOut(player.position, PLAYER_RADIUS)
             }
+            job.update(delta, if (!onFoot && controller === danfo) danfo else null)
         }
 
         if (onFoot) {
@@ -232,16 +258,18 @@ class LagosDriftGame : ApplicationAdapter() {
         }
 
         if (!mapOpen) {
-            traffic.update(delta, focus, controller.position, onFoot, player.position)
+            traffic.update(delta, focus, vehiclePositions, onFoot, player.position)
             crowd.update(delta, focus)
         }
         chunks.update(focus.x, focus.z)
 
-        carInstance.transform.setToRotation(Vector3.Y, controller.yawDegrees)
-            .setTranslation(controller.position.x, controller.position.y + controller.bounceHeight, controller.position.z)
+        carInstance.transform.setToRotation(Vector3.Y, grind.yawDegrees)
+            .setTranslation(grind.position.x, grind.position.y + grind.bounceHeight, grind.position.z)
+        danfoInstance.transform.setToRotation(Vector3.Y, danfo.yawDegrees)
+            .setTranslation(danfo.position.x, danfo.position.y + danfo.bounceHeight, danfo.position.z)
         if (onFoot) player.applyTo(playerInstance, clock)
 
-        val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else 1f
+        val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
         chaseCamera.distanceScale += (scaleTarget - chaseCamera.distanceScale) * minOf(1f, 4f * delta)
         val followSpeed = if (onFoot) player.speed else controller.speed
         chaseCamera.update(focus, focusYaw, followSpeed, delta, viewMode)
@@ -255,17 +283,22 @@ class LagosDriftGame : ApplicationAdapter() {
         chunks.render(modelBatch, environment, camera)
         crowd.render(modelBatch, environment, focus)
         traffic.render(modelBatch, environment, camera, focus)
+        job.render(modelBatch, environment, camera, focus)
         modelBatch.render(carInstance, environment)
+        modelBatch.render(danfoInstance, environment)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
 
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
 
-        val parked: Vector3? = if (onFoot) controller.position else null
+        parkedMarkers.clear()
+        if (onFoot || controller !== grind) parkedMarkers.add(grind.position)
+        if (onFoot || controller !== danfo) parkedMarkers.add(danfo.position)
+        val parked: List<Vector3> = parkedMarkers
         if (mapOpen) {
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked)
+            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked, job.mapStops)
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
         } else {
@@ -273,7 +306,7 @@ class LagosDriftGame : ApplicationAdapter() {
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked)
+            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked, job.mapStops)
             shapeRenderer.end()
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
 
@@ -310,6 +343,36 @@ class LagosDriftGame : ApplicationAdapter() {
                 screenWidth / 2f - glyphLayout.width / 2f,
                 margin + glyphLayout.height * 3f
             )
+
+            // Danfo work: passengers, money, where to go next.
+            if ((!onFoot && controller === danfo) || job.passengerCount > 0) {
+                val line = "Passengers ${job.passengerCount}/${DanfoJob.CAPACITY}     N${job.money}"
+                glyphLayout.setText(font, line)
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth / 2f - glyphLayout.width / 2f,
+                    screenHeight - margin - glyphLayout.height * 3.5f
+                )
+                val next = job.hintLine(focus.x, focus.z)
+                if (next.isNotEmpty()) {
+                    glyphLayout.setText(font, next)
+                    font.draw(
+                        spriteBatch, glyphLayout,
+                        screenWidth / 2f - glyphLayout.width / 2f,
+                        screenHeight - margin - glyphLayout.height * 5.5f
+                    )
+                }
+            }
+            if (job.messageTimer > 0f) {
+                font.data.setScale(textScale * 1.5f)
+                glyphLayout.setText(font, job.message)
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth / 2f - glyphLayout.width / 2f,
+                    screenHeight * 0.7f
+                )
+                font.data.setScale(textScale)
+            }
 
             if (hintTimer > 0f) {
                 glyphLayout.setText(font, hintText)
@@ -385,9 +448,40 @@ class LagosDriftGame : ApplicationAdapter() {
         player.update(delta, desiredYaw, intensity, controls.jumpTapped)
     }
 
-    private fun showHint(text: String) {
+    private fun showHint(text: String, seconds: Float = 2.5f) {
         hintText = text
-        hintTimer = 2.5f
+        hintTimer = seconds
+    }
+
+    private fun radiusOf(v: CarController): Float = if (v === danfo) DANFO_RADIUS else CAR_RADIUS
+    private fun offsetOf(v: CarController): Float = if (v === danfo) DANFO_OFFSET else CAR_OFFSET
+
+    /** The vehicle close enough to get into, or null. If both are close, the nearer one. */
+    private fun nearestVehicleInReach(): CarController? {
+        var best: CarController? = null
+        var bestD = Float.MAX_VALUE
+        for (v in arrayOf(grind, danfo)) {
+            val dx = player.position.x - v.position.x
+            val dz = player.position.z - v.position.z
+            val d2 = dx * dx + dz * dz
+            val reach = if (v === danfo) DANFO_ENTER_RANGE else ENTER_RANGE
+            if (d2 <= reach * reach && d2 < bestD) {
+                best = v
+                bestD = d2
+            }
+        }
+        return best
+    }
+
+    /** The driver's-eye view sits further forward and higher up in the danfo. */
+    private fun applyVehicleCamera() {
+        if (controller === danfo) {
+            chaseCamera.hoodBack = -1.3f
+            chaseCamera.hoodHeight = 1.9f
+        } else {
+            chaseCamera.hoodBack = 0.15f
+            chaseCamera.hoodHeight = 1.3f
+        }
     }
 
     /** For example "IKORODU - broken road". */
@@ -409,6 +503,8 @@ class LagosDriftGame : ApplicationAdapter() {
         groundModel.dispose()
         chunks.dispose()
         carModel.dispose()
+        danfoModel.dispose()
+        job.dispose()
         playerModel.dispose()
         traffic.dispose()
         for (m in pedestrianModels) m.dispose()
@@ -421,6 +517,14 @@ class LagosDriftGame : ApplicationAdapter() {
         const val FAR_DISTANCE = 430f
         const val EXIT_MAX_SPEED = 3f
         const val ENTER_RANGE = 4.5f
+        const val DANFO_ENTER_RANGE = 5.8f
+        const val CAR_EXIT_SIDE = 2.4f
+        const val DANFO_EXIT_SIDE = 2.9f
+        const val CAR_RADIUS = 1.1f
+        const val CAR_OFFSET = 1.2f
+        const val DANFO_RADIUS = 1.2f
+        const val DANFO_OFFSET = 1.5f
+        const val DANFO_CAMERA_SCALE = 1.3f
         const val PLAYER_RADIUS = 0.4f
         const val WALK_TO_MAX = 80f
         const val ON_FOOT_CAMERA_SCALE = 0.42f

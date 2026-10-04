@@ -89,17 +89,17 @@ class TrafficManager {
     }
 
     /** Fills the roads around [focus] with cars when the game starts. */
-    fun populate(focus: Vector3, car: Vector3) {
+    fun populate(focus: Vector3, playerVehicles: List<Vector3>) {
         for (i in 0 until MAX_VEHICLES * 6) {
             if (vehicles.size >= MAX_VEHICLES) break
-            trySpawn(focus, car, 45f, SPAWN_MAX)
+            trySpawn(focus, playerVehicles, 45f, SPAWN_MAX)
         }
     }
 
-    fun update(delta: Float, focus: Vector3, car: Vector3, onFoot: Boolean, foot: Vector3) {
+    fun update(delta: Float, focus: Vector3, playerVehicles: List<Vector3>, onFoot: Boolean, foot: Vector3) {
         val dt = min(delta, 0.05f)
 
-        for (v in vehicles) step(v, dt, car, onFoot, foot, focus)
+        for (v in vehicles) step(v, dt, playerVehicles, onFoot, foot, focus)
 
         for (i in vehicles.size - 1 downTo 0) {
             if (vehicles[i].remove) vehicles.removeAt(i)
@@ -108,7 +108,7 @@ class TrafficManager {
         spawnTimer += dt
         if (vehicles.size < MAX_VEHICLES && spawnTimer > 0.3f) {
             spawnTimer = 0f
-            trySpawn(focus, car, SPAWN_MIN, SPAWN_MAX)
+            trySpawn(focus, playerVehicles, SPAWN_MIN, SPAWN_MAX)
         }
     }
 
@@ -124,7 +124,7 @@ class TrafficManager {
     }
 
     /** Stops the player's car driving through other cars. Slows both. */
-    fun collide(car: CarController) {
+    fun collide(car: CarController, carOffset: Float = CAR_OFFSET, carRadius: Float = CAR_RADIUS) {
         val rad = car.yawDegrees * MathUtils.degreesToRadians
         val fx = -MathUtils.sin(rad)
         val fz = -MathUtils.cos(rad)
@@ -136,13 +136,13 @@ class TrafficManager {
             var hit = false
             for (a in -1..1 step 2) {
                 for (b in -1..1 step 2) {
-                    val ax = car.position.x + fx * CAR_OFFSET * a
-                    val az = car.position.z + fz * CAR_OFFSET * a
+                    val ax = car.position.x + fx * carOffset * a
+                    val az = car.position.z + fz * carOffset * a
                     val bx = v.x + vf[0] * v.circleOffset * b
                     val bz = v.z + vf[1] * v.circleOffset * b
                     var ex = ax - bx
                     var ez = az - bz
-                    val limit = CAR_RADIUS + v.radius
+                    val limit = carRadius + v.radius
                     val d2 = ex * ex + ez * ez
                     if (d2 >= limit * limit) continue
                     var d = sqrt(d2)
@@ -205,7 +205,9 @@ class TrafficManager {
         return headingTmp
     }
 
-    private fun step(v: Vehicle, dt: Float, car: Vector3, onFoot: Boolean, foot: Vector3, focus: Vector3) {
+    private fun step(
+        v: Vehicle, dt: Float, playerVehicles: List<Vector3>, onFoot: Boolean, foot: Vector3, focus: Vector3
+    ) {
         val fdx = v.x - focus.x
         val fdz = v.z - focus.z
         if (fdx * fdx + fdz * fdz > DESPAWN_RANGE * DESPAWN_RANGE) {
@@ -229,10 +231,13 @@ class TrafficManager {
 
         var hardBrake = false
         // The player's car.
-        var allowed = obstacleSpeed(v, car.x, car.z, fx, fz, look, 2.4f, 6f)
-        if (allowed < target) {
-            target = allowed
-            if (allowed < 1f) hardBrake = true
+        var allowed = 99f
+        for (pv in playerVehicles) {
+            allowed = obstacleSpeed(v, pv.x, pv.z, fx, fz, look, 2.6f, 6.5f)
+            if (allowed < target) {
+                target = allowed
+                if (allowed < 1f) hardBrake = true
+            }
         }
         if (onFoot) {
             allowed = obstacleSpeed(v, foot.x, foot.z, fx, fz, look, 2.2f, 6f)
@@ -453,7 +458,7 @@ class TrafficManager {
 
     // ------------------------------------------------------------------ spawning
 
-    private fun trySpawn(focus: Vector3, car: Vector3, minD: Float, maxD: Float) {
+    private fun trySpawn(focus: Vector3, playerVehicles: List<Vector3>, minD: Float, maxD: Float) {
         val roads = TownLayout.roads
         for (attempt in 0 until 8) {
             val r = roads[rnd.nextInt(roads.size)]
@@ -477,9 +482,13 @@ class TrafficManager {
             if (d2 < minD * minD || d2 > maxD * maxD) continue
             if (x < TownLayout.DRIVE_MIN_X || x > TownLayout.DRIVE_MAX_X) continue
             if (z < TownLayout.DRIVE_MIN_Z || z > TownLayout.DRIVE_MAX_Z) continue
-            val cx = x - car.x
-            val cz = z - car.z
-            if (cx * cx + cz * cz < 20f * 20f) continue
+            var nearPlayer = false
+            for (pv in playerVehicles) {
+                val cx = x - pv.x
+                val cz = z - pv.z
+                if (cx * cx + cz * cz < 20f * 20f) nearPlayer = true
+            }
+            if (nearPlayer) continue
 
             var clear = true
             for (o in vehicles) {

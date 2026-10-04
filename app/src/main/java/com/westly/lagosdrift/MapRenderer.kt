@@ -52,7 +52,7 @@ class MapRenderer {
     /** Small map that turns so the car always points up. size is the square's side in pixels. */
     fun drawMini(
         shapes: ShapeRenderer, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float,
-        parked: Vector3? = null
+        parked: List<Vector3>? = null, stops: List<MapStop>? = null
     ) {
         rotating = true
         carX = car.x
@@ -73,7 +73,8 @@ class MapRenderer {
         val reach = MINI_SPAN * 0.85f
         drawWorld(shapes, car.x - reach, car.x + reach, car.z - reach, car.z + reach)
 
-        if (parked != null) parkedMarker(shapes, parked, size * 0.05f)
+        if (stops != null) for (s in stops) stopMarker(shapes, s, size * 0.035f)
+        if (parked != null) for (p in parked) parkedMarker(shapes, p, size * 0.05f)
 
         // The player: always pointing up, with a white outline.
         val s = size * 0.07f
@@ -97,7 +98,8 @@ class MapRenderer {
 
     /** The big map, north at the top, showing whatever part of the world [view] is looking at. */
     fun drawFull(
-        shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float, parked: Vector3? = null
+        shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float,
+        parked: List<Vector3>? = null, stops: List<MapStop>? = null
     ) {
         val w = view.width
         val h = view.height
@@ -121,7 +123,8 @@ class MapRenderer {
             view.centreZ - halfH, view.centreZ + halfH
         )
 
-        if (parked != null) parkedMarker(shapes, parked, h * 0.022f)
+        if (stops != null) for (s in stops) stopMarker(shapes, s, h * 0.016f)
+        if (parked != null) for (p in parked) parkedMarker(shapes, p, h * 0.022f)
 
         // The player, pointing the way they face (north is up).
         project(car.x, car.z)
@@ -135,7 +138,21 @@ class MapRenderer {
         arrow(shapes, px, py, dirX, dirY, s, Color(0.9f, 0.1f, 0.1f, 1f))
     }
 
-    /** A yellow square with a dark outline: the car you left parked. */
+    /** A bus stop: orange when people wait, green when a passenger wants to get off, grey when quiet. */
+    private fun stopMarker(shapes: ShapeRenderer, stop: MapStop, half: Float) {
+        project(stop.x, stop.z)
+        if (outX < clipX0 || outX > clipX1 || outY < clipY0 || outY > clipY1) return
+        shapes.setColor(1f, 1f, 1f, 1f)
+        shapes.circle(outX, outY, half * 1.3f, 14)
+        when (stop.state) {
+            2 -> shapes.setColor(0.15f, 0.8f, 0.3f, 1f)
+            1 -> shapes.setColor(0.98f, 0.55f, 0.08f, 1f)
+            else -> shapes.setColor(0.55f, 0.55f, 0.55f, 1f)
+        }
+        shapes.circle(outX, outY, half, 14)
+    }
+
+    /** A yellow square with a dark outline: a vehicle you left parked. */
     private fun parkedMarker(shapes: ShapeRenderer, parked: Vector3, half: Float) {
         project(parked.x, parked.z)
         if (outX < clipX0 || outX > clipX1 || outY < clipY0 || outY > clipY1) return
