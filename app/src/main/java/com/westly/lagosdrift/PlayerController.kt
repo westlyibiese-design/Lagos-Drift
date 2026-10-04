@@ -13,8 +13,8 @@ import kotlin.math.sin
  * character turns to face the way it walks, like a person, and can jump. The yaw follows the
  * car's rule: 0 faces -Z and a positive yaw turns left.
  *
- * The character is one solid model (no skeleton), so it walks with a chibi waddle: it bobs up and
- * down with every step, sways from side to side and leans into the walk.
+ * The model has no skeleton, but it is baked in three pieces: the body and two legs. The legs swing
+ * from the hips, one forward while the other goes back, and the body gives a small bob and sway.
  */
 class PlayerController {
     val position = Vector3()
@@ -90,11 +90,11 @@ class PlayerController {
     fun applyTo(instance: ModelInstance, time: Float) {
         val onGround = grounded
         val moving = (abs(speed) / WALK_SPEED).coerceIn(0f, 1.6f)
-        val bob = if (onGround) abs(sin(phase)) * 0.07f * min(moving, 1f) else 0f
-        val roll = sin(phase) * 7f * min(moving, 1f)
-        val lean = 6f * moving
+        val bob = if (onGround) abs(sin(phase)) * 0.04f * min(moving, 1f) else 0f
+        val roll = sin(phase) * 2.5f * min(moving, 1f)
+        val lean = 4f * moving
         val breath = 1f + 0.012f * sin(time * 2.2f) * (1f - min(moving, 1f))
-        val squash = 1f + 0.025f * cos(phase * 2f) * min(moving, 1f)
+        val squash = 1f + 0.01f * cos(phase * 2f) * min(moving, 1f)
         val stretch = if (onGround) 1f else 1.07f
         val s = PlayerModelFactory.SCALE
 
@@ -104,6 +104,12 @@ class PlayerController {
             .rotate(Vector3.Z, roll)
             .rotate(Vector3.X, -lean)
             .scale(s / squash, s * squash * breath * stretch, s / squash)
+
+        // Legs swing from the hips. A positive turn about X moves the foot forward (-Z).
+        val swing = if (onGround) sin(phase) * LEG_SWING * min(moving, 1.3f) else AIR_LEG
+        instance.getNode(PlayerModelFactory.LEG_A)?.rotation?.set(Vector3.X, swing)
+        instance.getNode(PlayerModelFactory.LEG_B)?.rotation?.set(Vector3.X, -swing)
+        instance.calculateTransforms()
     }
 
     private fun wrap(angle: Float): Float {
@@ -120,5 +126,7 @@ class PlayerController {
         const val JUMP_SPEED = 5.2f
         const val GRAVITY = 15f
         const val TWO_PI = 6.2831855f
+        const val LEG_SWING = 32f        // degrees each way at a walk
+        const val AIR_LEG = 20f          // legs apart while jumping
     }
 }

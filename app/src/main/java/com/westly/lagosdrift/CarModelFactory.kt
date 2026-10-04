@@ -27,7 +27,13 @@ object CarModelFactory {
     private val rim = Color(0.58f, 0.60f, 0.64f, 1f)
     private val accent = Color(0.85f, 0.10f, 0.10f, 1f)
 
-    fun build(bodyColor: Color = CarPalette.GREY): Model {
+    /** Where the driver's door hinges: left side, front edge. The door node turns about here. */
+    const val DOOR_HINGE_X = -0.93f
+    const val DOOR_HINGE_Z = -0.45f
+    const val DOOR_NODE = "door"
+
+    /** With [withDoor] the driver's door is its own piece that can swing open (the player's car). */
+    fun build(bodyColor: Color = CarPalette.GREY, withDoor: Boolean = false): Model {
         val b = ModelBuilder()
         b.begin()
         b.node()
@@ -53,6 +59,8 @@ object CarModelFactory {
         dark.boxAt(0f, 0.62f, -2.41f, 1.1f, 0.26f, 0.06f)
         dark.boxAt(0f, 0.40f, -2.35f, 1.75f, 0.08f, 0.18f)
         dark.boxAt(0f, 0.40f, 2.38f, 1.5f, 0.1f, 0.15f)
+        // A dark doorway behind the driver's door, seen when it swings open.
+        if (withDoor) dark.boxAt(-0.93f, 0.66f, 0.05f, 0.02f, 0.5f, 0.98f)
 
         // Headlights.
         val heads = b.colorPart("headlights", lamp)
@@ -89,6 +97,17 @@ object CarModelFactory {
             for (sz in floatArrayOf(-1f, 1f)) {
                 caps.cylinderAt(sx * wheelX, wheelY, sz * wheelZ, 0.14f, 0.32f, 8, Vector3.Z)
             }
+        }
+
+        if (withDoor) {
+            // The door panel and handle, positioned relative to the hinge.
+            val node = b.node()
+            node.id = DOOR_NODE
+            node.translation.set(DOOR_HINGE_X, 0f, DOOR_HINGE_Z)
+            val panel = b.colorPart("doorPaint", bodyColor)
+            panel.boxAt(-0.02f, 0.66f, 0.5f, 0.05f, 0.52f, 1.0f)
+            val handle = b.colorPart("doorHandle", rim)
+            handle.boxAt(-0.06f, 0.80f, 0.85f, 0.04f, 0.04f, 0.18f)
         }
 
         return b.end()

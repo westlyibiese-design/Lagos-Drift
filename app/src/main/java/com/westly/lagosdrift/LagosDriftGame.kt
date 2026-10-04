@@ -66,6 +66,15 @@ class LagosDriftGame : ApplicationAdapter() {
     private var onFoot = false
     private val walkTarget = Vector3()
     private var hasWalkTarget = false
+
+    // The 6 GRIND's driver door and the get-out / get-in walk. 0 = none, 1 = getting out, 2 = getting in.
+    private var doorSequence = 0
+    private var doorTimer = 0f
+    private var doorAmount = 0f
+    private var doorTarget = 0f
+    private var doorHold = 0f
+    private val seqFrom = Vector3()
+    private val seqTo = Vector3()
     private var walkTimer = 0f
     private var hintText = ""
     private var hintTimer = 0f
@@ -101,7 +110,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         modelBatch = ModelBatch()
         groundModel = GroundModelFactory.build()
-        carModel = CarModelFactory.build()
+        carModel = CarModelFactory.build(withDoor = true)
         pedestrianModels = PedestrianModelFactory.buildAll()
         groundInstance = ModelInstance(groundModel)
         carInstance = ModelInstance(carModel)
@@ -184,7 +193,24 @@ class LagosDriftGame : ApplicationAdapter() {
         // Get out of the vehicle, or back in.
         if (controls.actionTapped && !mapOpen) {
             if (!onFoot) {
-                if (kotlin.math.abs(controller.speed) < EXIT_MAX_SPEED) {
+                if (doorSequence != 0) {
+                    // Already busy with the door.
+                } else if (kotlin.math.abs(controller.speed) < EXIT_MAX_SPEED && controller === grind) {
+                    // Open the door, step out of the seat and walk round the door.
+                    tmp.set(0f, 0f, -1f).rotate(Vector3.Y, grind.yawDegrees + 90f)
+                    seqFrom.set(grind.position.x + tmp.x * SEAT_SIDE, 0f, grind.position.z + tmp.z * SEAT_SIDE)
+                    seqTo.set(grind.position.x + tmp.x * CAR_EXIT_SIDE, 0f, grind.position.z + tmp.z * CAR_EXIT_SIDE)
+                    TownCollision.resolvePoint(seqTo, PLAYER_RADIUS)
+                    player.place(seqFrom.x, seqFrom.z, grind.yawDegrees + 90f)
+                    doorSequence = 1
+                    doorTimer = 0f
+                    doorTarget = 1f
+                    onFoot = true
+                    hasWalkTarget = false
+                    chaseCamera.freeLook = true
+                    controls.setOnFoot(true)
+                    showHint("Stick = walk, JUMP = jump, double-tap = walk there. ENTER next to a vehicle")
+                } else if (kotlin.math.abs(controller.speed) < EXIT_MAX_SPEED) {
                     val side = if (controller === danfo) DANFO_EXIT_SIDE else CAR_EXIT_SIDE
                     tmp.set(0f, 0f, -1f).rotate(Vector3.Y, controller.yawDegrees + 90f)
                     player.place(
@@ -203,7 +229,18 @@ class LagosDriftGame : ApplicationAdapter() {
                 }
             } else {
                 val pick = nearestVehicleInReach()
-                if (pick != null) {
+                if (doorSequence != 0) {
+                    // Already busy with the door.
+                } else if (pick === grind) {
+                    // Open the door, then walk to the seat.
+                    tmp.set(0f, 0f, -1f).rotate(Vector3.Y, grind.yawDegrees + 90f)
+                    seqFrom.set(player.position)
+                    seqTo.set(grind.position.x + tmp.x * SEAT_SIDE, 0f, grind.position.z + tmp.z * SEAT_SIDE)
+                    doorSequence = 2
+                    doorTimer = 0f
+                    doorTarget = 1f
+                    hasWalkTarget = false
+                } else if (pick != null) {
                     controller = pick
                     onFoot = false
                     hasWalkTarget = false
@@ -228,15 +265,19 @@ class LagosDriftGame : ApplicationAdapter() {
         if (!mapOpen) {
             // The vehicle you drive gets your controls; the other one just rolls to a stop.
             for (v in arrayOf(grind, danfo)) {
-                if (!onFoot && v === controller) {
+                if (!onFoot && v === controller && doorSequence == 0) {
                     v.update(delta, controls.steer, controls.throttle, controls.brake)
+                } else if (v === grind && doorSequence != 0) {
+                    v.update(delta, 0f, false, true)
                 } else {
                     v.update(delta, 0f, false, false)
                 }
                 TownCollision.resolve(v, radiusOf(v), offsetOf(v))
                 traffic.collide(v, offsetOf(v), radiusOf(v))
             }
-            if (onFoot) {
+            if (onFoot && doorSequence != 0) {
+                runDoorSequence(delta)
+            } else if (onFoot) {
                 walkOnFoot(delta)
                 TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
                 for (v in arrayOf(grind, danfo)) {
@@ -247,6 +288,14 @@ class LagosDriftGame : ApplicationAdapter() {
                 traffic.pushOut(player.position, PLAYER_RADIUS)
             }
             job.update(delta, if (!onFoot && controller === danfo) danfo else null)
+
+            // The driver's door swings open and shut.
+            if (doorSequence == 0 && doorHold > 0f) {
+                doorHold -= delta
+                if (doorHold <= 0f) doorTarget = 0f
+            }
+            val doorStep = delta / DOOR_TIME
+            doorAmount += (doorTarget - doorAmount).coerceIn(-doorStep, doorStep)
         }
 
         if (onFoot) {
@@ -267,6 +316,8 @@ class LagosDriftGame : ApplicationAdapter() {
             .setTranslation(grind.position.x, grind.position.y + grind.bounceHeight, grind.position.z)
         danfoInstance.transform.setToRotation(Vector3.Y, danfo.yawDegrees)
             .setTranslation(danfo.position.x, danfo.position.y + danfo.bounceHeight, danfo.position.z)
+        carInstance.getNode(CarModelFactory.DOOR_NODE)?.rotation?.set(Vector3.Y, -DOOR_ANGLE * doorAmount)
+        carInstance.calculateTransforms()
         if (onFoot) player.applyTo(playerInstance, clock)
 
         val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
@@ -392,6 +443,36 @@ class LagosDriftGame : ApplicationAdapter() {
     }
 
     /** Reads the walking stick (or a double-tapped spot) and moves the player. */
+    /** Plays the walk out of, or into, the 6 GRIND while its door is open. */
+    private fun runDoorSequence(delta: Float) {
+        doorTimer += delta
+        val moveStart = DOOR_TIME
+        val moveEnd = DOOR_TIME + DOOR_WALK_TIME
+        val t = ((doorTimer - moveStart) / DOOR_WALK_TIME).coerceIn(0f, 1f)
+        val walking = doorTimer >= moveStart && doorTimer < moveEnd
+
+        // Face the way we are walking (out: away from the car; in: towards it).
+        val faceYaw = grind.yawDegrees + if (doorSequence == 1) 90f else -90f
+        player.update(delta, faceYaw, if (walking) 0.4f else 0f, false)
+        player.position.set(
+            seqFrom.x + (seqTo.x - seqFrom.x) * t,
+            0f,
+            seqFrom.z + (seqTo.z - seqFrom.z) * t
+        )
+
+        if (doorTimer >= moveEnd) {
+            if (doorSequence == 2) {
+                controller = grind
+                onFoot = false
+                chaseCamera.freeLook = false
+                controls.setOnFoot(false)
+                applyVehicleCamera()
+            }
+            doorSequence = 0
+            doorHold = DOOR_HOLD_TIME
+        }
+    }
+
     private fun walkOnFoot(delta: Float) {
         // Look around by dragging on empty screen.
         if (controls.lookDragX != 0f) chaseCamera.addYaw(controls.lookDragX * 0.2f)
@@ -516,6 +597,11 @@ class LagosDriftGame : ApplicationAdapter() {
     private companion object {
         const val FAR_DISTANCE = 430f
         const val EXIT_MAX_SPEED = 3f
+        const val DOOR_ANGLE = 70f        // how far the driver's door swings open
+        const val DOOR_TIME = 0.35f       // seconds to open or close
+        const val DOOR_WALK_TIME = 0.6f   // seconds to step out or in
+        const val DOOR_HOLD_TIME = 0.35f  // door stays open this long after
+        const val SEAT_SIDE = 0.35f       // seat position, metres left of the car centre
         const val ENTER_RANGE = 4.5f
         const val DANFO_ENTER_RANGE = 5.8f
         const val CAR_EXIT_SIDE = 2.4f
