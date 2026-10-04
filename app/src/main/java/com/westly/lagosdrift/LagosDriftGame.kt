@@ -54,6 +54,9 @@ class LagosDriftGame : ApplicationAdapter() {
     private var mapOpen = false
 
     private var onFoot = false
+    private val walkTarget = Vector3()
+    private var hasWalkTarget = false
+    private var walkTimer = 0f
     private var hintText = ""
     private var hintTimer = 0f
     private var clock = 0f
@@ -174,8 +177,10 @@ class LagosDriftGame : ApplicationAdapter() {
                     )
                     TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
                     onFoot = true
+                    hasWalkTarget = false
+                    chaseCamera.freeLook = true
                     controls.setOnFoot(true)
-                    showHint("Walk back to your car and press ENTER")
+                    showHint("Stick = walk, JUMP = jump, double-tap = walk there. ENTER at your car")
                 } else {
                     showHint("Slow down to get out")
                 }
@@ -184,6 +189,8 @@ class LagosDriftGame : ApplicationAdapter() {
                 val dz = player.position.z - controller.position.z
                 if (dx * dx + dz * dz <= ENTER_RANGE * ENTER_RANGE) {
                     onFoot = false
+                    hasWalkTarget = false
+                    chaseCamera.freeLook = false
                     controls.setOnFoot(false)
                 } else {
                     showHint("Too far from your car")
@@ -203,7 +210,7 @@ class LagosDriftGame : ApplicationAdapter() {
             if (onFoot) {
                 // The car rolls to a stop by itself (no brake, so it never reverses).
                 controller.update(delta, 0f, false, false)
-                player.update(delta, controls.steer, controls.throttle, controls.brake)
+                walkOnFoot(delta)
             } else {
                 controller.update(delta, controls.steer, controls.throttle, controls.brake)
             }
@@ -321,6 +328,63 @@ class LagosDriftGame : ApplicationAdapter() {
         spriteBatch.end()
     }
 
+    /** Reads the walking stick (or a double-tapped spot) and moves the player. */
+    private fun walkOnFoot(delta: Float) {
+        // Look around by dragging on empty screen.
+        if (controls.lookDragX != 0f) chaseCamera.addYaw(controls.lookDragX * 0.2f)
+
+        // Double-tap the ground to walk there.
+        if (controls.doubleTapped) {
+            val ray = camera.getPickRay(controls.doubleTapX, screenHeight - controls.doubleTapY)
+            if (ray.direction.y < -0.01f) {
+                val t = -ray.origin.y / ray.direction.y
+                val tx = ray.origin.x + ray.direction.x * t
+                val tz = ray.origin.z + ray.direction.z * t
+                val dx = tx - player.position.x
+                val dz = tz - player.position.z
+                if (dx * dx + dz * dz < WALK_TO_MAX * WALK_TO_MAX) {
+                    walkTarget.set(tx, 0f, tz)
+                    hasWalkTarget = true
+                    walkTimer = 15f
+                }
+            }
+        }
+
+        var desiredYaw = player.yawDegrees
+        var intensity = 0f
+
+        if (controls.joystickActive && (controls.moveX != 0f || controls.moveY != 0f)) {
+            hasWalkTarget = false
+            // The stick is read relative to where the camera looks.
+            var fx = camera.direction.x
+            var fz = camera.direction.z
+            val flen = kotlin.math.sqrt(fx * fx + fz * fz)
+            if (flen > 0.0001f) {
+                fx /= flen
+                fz /= flen
+                val rx = -fz
+                val rz = fx
+                val dx = fx * controls.moveY + rx * controls.moveX
+                val dz = fz * controls.moveY + rz * controls.moveX
+                desiredYaw = Math.toDegrees(kotlin.math.atan2(-dx.toDouble(), -dz.toDouble())).toFloat()
+                intensity = kotlin.math.sqrt(controls.moveX * controls.moveX + controls.moveY * controls.moveY).coerceIn(0f, 1f)
+            }
+        } else if (hasWalkTarget) {
+            walkTimer -= delta
+            val dx = walkTarget.x - player.position.x
+            val dz = walkTarget.z - player.position.z
+            val dist = kotlin.math.sqrt(dx * dx + dz * dz)
+            if (dist < 0.6f || walkTimer <= 0f) {
+                hasWalkTarget = false
+            } else {
+                desiredYaw = Math.toDegrees(kotlin.math.atan2(-dx.toDouble(), -dz.toDouble())).toFloat()
+                intensity = if (dist > 14f) 1f else 0.7f
+            }
+        }
+
+        player.update(delta, desiredYaw, intensity, controls.jumpTapped)
+    }
+
     private fun showHint(text: String) {
         hintText = text
         hintTimer = 2.5f
@@ -358,6 +422,7 @@ class LagosDriftGame : ApplicationAdapter() {
         const val EXIT_MAX_SPEED = 3f
         const val ENTER_RANGE = 4.5f
         const val PLAYER_RADIUS = 0.4f
+        const val WALK_TO_MAX = 80f
         const val ON_FOOT_CAMERA_SCALE = 0.42f
         const val SKY_R = 0.53f
         const val SKY_G = 0.81f

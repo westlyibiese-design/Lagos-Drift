@@ -39,6 +39,30 @@ class TouchControls {
     var zoomOutHeld = false
         private set
 
+    /** Walking: the stick, each from -1 to 1 (x right, y up). Zero when the stick is not touched. */
+    var moveX = 0f
+        private set
+    var moveY = 0f
+        private set
+    var joystickActive = false
+        private set
+
+    /** True for one frame when JUMP is first pressed (walking only). */
+    var jumpTapped = false
+        private set
+
+    /** Walking: how far one finger dragged on empty screen this frame, in pixels (right is positive). */
+    var lookDragX = 0f
+        private set
+
+    /** Walking: true for one frame when empty ground is double-tapped. Position is in pixels, y up. */
+    var doubleTapped = false
+        private set
+    var doubleTapX = 0f
+        private set
+    var doubleTapY = 0f
+        private set
+
     /** Zoom change this frame from a pinch. Below 1 means fingers spreading (zoom in). */
     var pinchRatio = 1f
         private set
@@ -79,8 +103,31 @@ class TouchControls {
     )
 
     private val mapOnly = listOf(mapButton)
+
+    // Walking shows only these: JUMP (in the gas button's place), the right-hand column and ENTER.
+    private val footButtons = listOf(gasButton, mapButton, cameraButton, zoomInButton, zoomOutButton, actionButton)
     private val active: List<Button>
-        get() = if (mapMode) mapOnly else allButtons
+        get() = if (mapMode) mapOnly else if (onFoot) footButtons else allButtons
+
+    private var onFoot = false
+    private var joyX = 0f
+    private var joyY = 0f
+    private var joyR = 1f
+    private var jumpWasDown = false
+    private var knobX = 0f
+    private var knobY = 0f
+
+    // Tracking one finger on empty screen: a quick tap, or a drag that turns the camera.
+    private var freeWasDown = false
+    private var freeStartX = 0f
+    private var freeStartY = 0f
+    private var freeStartTime = 0L
+    private var freeMoved = false
+    private var lastFreeX = 0f
+    private var lastFreeY = 0f
+    private var lastTapTime = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
 
     private var cameraWasDown = false
     private var mapWasDown = false
@@ -99,6 +146,10 @@ class TouchControls {
         val tinyR = h * 0.05f
         val rightEdge = w - insetRight - margin
 
+        joyR = h * 0.17f
+        joyX = insetLeft + margin + joyR
+        joyY = margin + joyR
+
         leftButton.place(insetLeft + margin + steerR, margin + steerR, steerR)
         rightButton.place(leftButton.x + steerR * 2f + gap, margin + steerR, steerR)
         gasButton.place(rightEdge - gasR, margin + gasR, gasR)
@@ -116,6 +167,12 @@ class TouchControls {
     /** Reads the fingers currently on the screen. Call once per frame. */
     fun update() {
         for (button in allButtons) button.pressed = false
+        moveX = 0f
+        moveY = 0f
+        joystickActive = false
+        lookDragX = 0f
+        doubleTapped = false
+        jumpTapped = false
 
         val screenHeight = Gdx.graphics.height.toFloat()
         var freeCount = 0
@@ -129,7 +186,28 @@ class TouchControls {
             val px = Gdx.input.getX(pointer).toFloat()
             val py = screenHeight - Gdx.input.getY(pointer).toFloat()
             var onButton = false
-            for (button in active) {
+
+            // Walking stick: a finger near the stick's base steers the character.
+            if (onFoot && !mapMode && !joystickActive) {
+                val jx = px - joyX
+                val jy = py - joyY
+                val reach = joyR * 1.5f
+                if (jx * jx + jy * jy <= reach * reach) {
+                    val len = hypot(jx, jy)
+                    val scale = if (len > joyR) joyR / len else 1f
+                    val nx = jx * scale / joyR
+                    val ny = jy * scale / joyR
+                    if (hypot(nx, ny) > 0.12f) {
+                        moveX = nx
+                        moveY = ny
+                    }
+                    joystickActive = true
+                    knobX = nx
+                    knobY = ny
+                    onButton = true
+                }
+            }
+            if (!onButton) for (button in active) {
                 if (button.contains(px, py)) {
                     button.pressed = true
                     onButton = true
@@ -147,6 +225,44 @@ class TouchControls {
             }
         }
 
+        if (!joystickActive) {
+            knobX = 0f
+            knobY = 0f
+        }
+
+        // One finger on empty screen while walking: a drag turns the camera, a double tap walks there.
+        if (onFoot && !mapMode && freeCount == 1) {
+            if (!freeWasDown) {
+                freeWasDown = true
+                freeStartX = firstX
+                freeStartY = firstY
+                freeStartTime = System.currentTimeMillis()
+                freeMoved = false
+            } else {
+                lookDragX = firstX - lastFreeX
+                if (hypot(firstX - freeStartX, firstY - freeStartY) > 28f) freeMoved = true
+            }
+            lastFreeX = firstX
+            lastFreeY = firstY
+        } else {
+            if (freeWasDown && freeCount == 0 && !freeMoved && onFoot && !mapMode) {
+                val now = System.currentTimeMillis()
+                if (now - freeStartTime < 300L) {
+                    if (now - lastTapTime < 450L && hypot(freeStartX - lastTapX, freeStartY - lastTapY) < 110f) {
+                        doubleTapped = true
+                        doubleTapX = freeStartX
+                        doubleTapY = freeStartY
+                        lastTapTime = 0L
+                    } else {
+                        lastTapTime = now
+                        lastTapX = freeStartX
+                        lastTapY = freeStartY
+                    }
+                }
+            }
+            freeWasDown = false
+        }
+
         // Two fingers on empty screen = pinch zoom.
         if (freeCount == 2) {
             val distance = hypot(secondX - firstX, secondY - firstY)
@@ -161,9 +277,19 @@ class TouchControls {
             pinchRatio = 1f
         }
 
-        steer = (if (rightButton.pressed) 1f else 0f) - (if (leftButton.pressed) 1f else 0f)
-        throttle = gasButton.pressed
-        brake = brakeButton.pressed
+        if (onFoot) {
+            // Walking: the driving controls do nothing; the gas button's place becomes JUMP.
+            steer = 0f
+            throttle = false
+            brake = false
+            jumpTapped = gasButton.pressed && !jumpWasDown
+            jumpWasDown = gasButton.pressed
+        } else {
+            steer = (if (rightButton.pressed) 1f else 0f) - (if (leftButton.pressed) 1f else 0f)
+            throttle = gasButton.pressed
+            brake = brakeButton.pressed
+            jumpWasDown = false
+        }
         zoomInHeld = zoomInButton.pressed
         zoomOutHeld = zoomOutButton.pressed
 
@@ -175,11 +301,17 @@ class TouchControls {
         mapWasDown = mapButton.pressed
     }
 
-    /** Changes the labels for walking: GO and BACK instead of GAS and BRAKE, and ENTER instead of EXIT. */
+    /**
+     * Switches between driving and walking. Walking hides the steering arrows and BRAKE, shows the
+     * walking stick, and turns GAS into JUMP and EXIT into ENTER.
+     */
     fun setOnFoot(onFoot: Boolean) {
-        gasButton.label = if (onFoot) "GO" else "GAS"
-        brakeButton.label = if (onFoot) "BACK" else "BRAKE"
+        this.onFoot = onFoot
+        gasButton.label = if (onFoot) "JUMP" else "GAS"
+        brakeButton.label = "BRAKE"
         actionButton.label = if (onFoot) "ENTER" else "EXIT"
+        freeWasDown = false
+        lastTapTime = 0L
     }
 
     /** True if a screen point (y up) is on a button that is currently shown. */
@@ -188,6 +320,17 @@ class TouchControls {
     fun drawShapes(shapes: ShapeRenderer) {
         for (button in active) circle(shapes, button)
         if (mapMode) return
+
+        if (onFoot) {
+            // The walking stick: a ring with a knob that follows the thumb.
+            shapes.setColor(1f, 1f, 1f, 0.14f)
+            shapes.circle(joyX, joyY, joyR, 48)
+            shapes.setColor(1f, 1f, 1f, 0.30f)
+            shapes.circle(joyX, joyY, joyR * 0.78f, 48)
+            shapes.setColor(1f, 1f, 1f, if (joystickActive) 0.60f else 0.38f)
+            shapes.circle(joyX + knobX * joyR * 0.7f, joyY + knobY * joyR * 0.7f, joyR * 0.38f, 40)
+            return
+        }
 
         // Steering arrows.
         shapes.setColor(1f, 1f, 1f, 0.85f)
@@ -215,7 +358,7 @@ class TouchControls {
         }
         font.data.setScale(textScale * 1.4f)
         label(batch, font, layout, gasButton)
-        label(batch, font, layout, brakeButton)
+        if (!onFoot) label(batch, font, layout, brakeButton)
         font.data.setScale(textScale * 1.1f)
         label(batch, font, layout, mapButton)
         label(batch, font, layout, cameraButton)
