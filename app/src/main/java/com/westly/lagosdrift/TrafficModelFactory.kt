@@ -36,8 +36,19 @@ object TrafficModelFactory {
     private val tyre = Color(0.07f, 0.07f, 0.08f, 1f)
     private val rim = Color(0.58f, 0.60f, 0.64f, 1f)
 
-    /** A Lagos danfo: a yellow minibus with a black stripe along the sides. */
-    fun buildDanfo(): Model {
+    /**
+     * The danfo: your own art (assets/traffic/danfo.bin and danfo.jpg). If those files are missing
+     * or cannot be read, the simple box-built danfo below is used instead.
+     */
+    fun buildDanfo(): Model =
+        try {
+            BakedModel.load("traffic/danfo.bin", "traffic/danfo.jpg")
+        } catch (e: Exception) {
+            buildSimpleDanfo()
+        }
+
+    /** A simple danfo built from boxes: a yellow minibus with a black stripe along the sides. */
+    private fun buildSimpleDanfo(): Model {
         val b = ModelBuilder()
         b.begin()
         b.node()

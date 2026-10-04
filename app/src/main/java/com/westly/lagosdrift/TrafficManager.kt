@@ -46,9 +46,9 @@ class TrafficManager {
         var ghost = 0f
         var remove = false
         val id = nextId++
-        val halfLength: Float = if (danfo) 2.3f else 2.1f
-        val circleOffset: Float = if (danfo) 1.4f else 1.2f
-        val radius: Float = if (danfo) 1.15f else 1.1f
+        val halfLength: Float = if (danfo) 2.4f else 2.1f
+        val circleOffset: Float = if (danfo) 1.5f else 1.2f
+        val radius: Float = if (danfo) 1.2f else 1.1f
     }
 
     private val cuts = HashMap<TownLayout.Road, List<Cut>>()
