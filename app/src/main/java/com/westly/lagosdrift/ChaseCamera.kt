@@ -16,6 +16,9 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
     /** 1 = normal. Smaller is closer. */
     var zoom = 1f
 
+    /** Extra closeness for the walking player (about 0.4); 1 when driving. */
+    var distanceScale = 1f
+
     private var cameraYaw = 0f
     private var orbitAngle = 0f
     private var started = false
@@ -43,8 +46,10 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 camera.fieldOfView = 65f
                 orbitAngle += 28f * delta
                 val a = orbitAngle * MathUtils.degreesToRadians
-                val d = 9.5f * zoom
-                camera.position.set(carPosition.x + sin(a) * d, 3.2f * zoom + 0.8f, carPosition.z + cos(a) * d)
+                val d = 9.5f * zoom * distanceScale
+                camera.position.set(
+                    carPosition.x + sin(a) * d, (3.2f * zoom + 0.8f) * distanceScale, carPosition.z + cos(a) * d
+                )
                 lookTarget.set(carPosition).add(0f, 1f, 0f)
             }
             else -> {
@@ -58,11 +63,11 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 if (diff < -180f) diff += 360f
                 cameraYaw += diff * min(1f, 4f * delta)
 
-                val distance = (baseDistance + abs(speed) * 0.08f) * zoom
+                val distance = (baseDistance + abs(speed) * 0.08f) * zoom * distanceScale
                 forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
                 camera.position.set(carPosition).mulAdd(forward, -distance)
-                camera.position.y += height * zoom
-                lookTarget.set(carPosition).add(0f, 1f, 0f).mulAdd(forward, 4f)
+                camera.position.y += height * zoom * distanceScale
+                lookTarget.set(carPosition).add(0f, 1f, 0f).mulAdd(forward, 4f * distanceScale)
             }
         }
 

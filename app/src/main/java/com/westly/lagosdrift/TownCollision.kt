@@ -6,7 +6,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Stops the car going through houses, market stalls and trees. The car is treated as two circles,
+ * Stops the car and the person on foot going through houses, market stalls and trees. The car is treated as two circles,
  * one near the nose and one near the tail. Hitting something slows the car right down. Only the
  * chunks around the car are checked.
  */
@@ -88,5 +88,77 @@ object TownCollision {
             p.z += dz / d * push
             car.bump(0.5f)
         }
+    }
+
+    // ------------------------------------------------------------------ people on foot
+
+    /** Keeps a walking person (a circle of [radius]) out of buildings, stalls and trees. */
+    fun resolvePoint(p: com.badlogic.gdx.math.Vector3, radius: Float) {
+        val cx0 = TownLayout.cxOf(p.x)
+        val cz0 = TownLayout.czOf(p.z)
+        for (dz in -1..1) {
+            for (dx in -1..1) {
+                val chunk = TownLayout.chunkAt(cx0 + dx, cz0 + dz) ?: continue
+                for (h in chunk.houses) {
+                    val nearX = p.x.coerceIn(h.cx - h.hw, h.cx + h.hw)
+                    val nearZ = p.z.coerceIn(h.cz - h.hd, h.cz + h.hd)
+                    val ex = p.x - nearX
+                    val ez = p.z - nearZ
+                    val d2 = ex * ex + ez * ez
+                    if (d2 >= radius * radius) continue
+                    if (d2 > 0.0001f) {
+                        val d = sqrt(d2)
+                        p.x += ex / d * (radius - d)
+                        p.z += ez / d * (radius - d)
+                    } else {
+                        // Standing inside a building: leave by the shortest way.
+                        val left = p.x - (h.cx - h.hw)
+                        val right = (h.cx + h.hw) - p.x
+                        val back = p.z - (h.cz - h.hd)
+                        val front = (h.cz + h.hd) - p.z
+                        val m = minOf(minOf(left, right), minOf(back, front))
+                        when (m) {
+                            left -> p.x = h.cx - h.hw - radius
+                            right -> p.x = h.cx + h.hw + radius
+                            back -> p.z = h.cz - h.hd - radius
+                            else -> p.z = h.cz + h.hd + radius
+                        }
+                    }
+                }
+                for (t in chunk.trees) {
+                    val ex = p.x - t.x
+                    val ez = p.z - t.z
+                    val limit = radius + TRUNK_RADIUS * t.scale
+                    val d2 = ex * ex + ez * ez
+                    if (d2 >= limit * limit) continue
+                    val d = maxOf(sqrt(d2), 0.001f)
+                    p.x += ex / d * (limit - d)
+                    p.z += ez / d * (limit - d)
+                }
+            }
+        }
+    }
+
+    /** Keeps a walking person out of a car (the car is two circles, like in resolve). */
+    fun pushOutOfCar(
+        p: com.badlogic.gdx.math.Vector3, radius: Float, carPos: com.badlogic.gdx.math.Vector3, carYaw: Float
+    ) {
+        val rad = carYaw * MathUtils.degreesToRadians
+        val ox = -sin(rad) * OFFSET
+        val oz = -cos(rad) * OFFSET
+        pushOutOfCircle(p, radius, carPos.x + ox, carPos.z + oz, RADIUS)
+        pushOutOfCircle(p, radius, carPos.x - ox, carPos.z - oz, RADIUS)
+    }
+
+    /** Pushes the person out of one circle. Used for cars, parked or driving. */
+    fun pushOutOfCircle(p: com.badlogic.gdx.math.Vector3, radius: Float, cx: Float, cz: Float, circleRadius: Float) {
+        val ex = p.x - cx
+        val ez = p.z - cz
+        val limit = radius + circleRadius
+        val d2 = ex * ex + ez * ez
+        if (d2 >= limit * limit) return
+        val d = maxOf(sqrt(d2), 0.001f)
+        p.x += ex / d * (limit - d)
+        p.z += ez / d * (limit - d)
     }
 }

@@ -27,6 +27,10 @@ class TouchControls {
     var mapTapped = false
         private set
 
+    /** True for one frame when the EXIT / ENTER button is first pressed. */
+    var actionTapped = false
+        private set
+
     /** While the big map is open only the MAP button is shown and used; the map reads the other touches. */
     var mapMode = false
 
@@ -39,7 +43,7 @@ class TouchControls {
     var pinchRatio = 1f
         private set
 
-    private class Button(val label: String) {
+    private class Button(var label: String) {
         var x = 0f
         var y = 0f
         var r = 0f
@@ -68,8 +72,10 @@ class TouchControls {
     private val cameraButton = Button("CAM")
     private val zoomInButton = Button("+")
     private val zoomOutButton = Button("-")
+    private val actionButton = Button("EXIT")
     private val allButtons = listOf(
-        leftButton, rightButton, gasButton, brakeButton, mapButton, cameraButton, zoomInButton, zoomOutButton
+        leftButton, rightButton, gasButton, brakeButton, mapButton, cameraButton, zoomInButton, zoomOutButton,
+        actionButton
     )
 
     private val mapOnly = listOf(mapButton)
@@ -78,6 +84,7 @@ class TouchControls {
 
     private var cameraWasDown = false
     private var mapWasDown = false
+    private var actionWasDown = false
     private var lastPinchDistance = 0f
 
     fun layout(width: Int, height: Int, insetLeft: Float, insetRight: Float) {
@@ -100,6 +107,7 @@ class TouchControls {
         // Column on the far right, above the gas button.
         val columnX = rightEdge - smallR
         mapButton.place(columnX, h * 0.80f, smallR)
+        actionButton.place(columnX - smallR * 2.5f, h * 0.80f, smallR)
         cameraButton.place(columnX, h * 0.65f, smallR)
         zoomInButton.place(columnX, h * 0.505f, tinyR)
         zoomOutButton.place(columnX, h * 0.385f, tinyR)
@@ -161,8 +169,17 @@ class TouchControls {
 
         cameraTapped = cameraButton.pressed && !cameraWasDown
         mapTapped = mapButton.pressed && !mapWasDown
+        actionTapped = actionButton.pressed && !actionWasDown
+        actionWasDown = actionButton.pressed
         cameraWasDown = cameraButton.pressed
         mapWasDown = mapButton.pressed
+    }
+
+    /** Changes the labels for walking: GO and BACK instead of GAS and BRAKE, and ENTER instead of EXIT. */
+    fun setOnFoot(onFoot: Boolean) {
+        gasButton.label = if (onFoot) "GO" else "GAS"
+        brakeButton.label = if (onFoot) "BACK" else "BRAKE"
+        actionButton.label = if (onFoot) "ENTER" else "EXIT"
     }
 
     /** True if a screen point (y up) is on a button that is currently shown. */
@@ -202,6 +219,8 @@ class TouchControls {
         font.data.setScale(textScale * 1.1f)
         label(batch, font, layout, mapButton)
         label(batch, font, layout, cameraButton)
+        font.data.setScale(textScale * 0.95f)
+        label(batch, font, layout, actionButton)
         font.data.setScale(textScale * 1.6f)
         label(batch, font, layout, zoomInButton)
         label(batch, font, layout, zoomOutButton)

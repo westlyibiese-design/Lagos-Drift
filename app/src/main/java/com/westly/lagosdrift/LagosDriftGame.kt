@@ -18,9 +18,9 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector3
 
 /**
- * Phase 4: drive the 6 GRIND around a big world: Ikoyi (clean, wide roads, towers) in the south and
- * Ikorodu (broken roads, potholes, market stalls) in the north. The world is built in 100 m chunks
- * around the car. The map scrolls and zooms like a real pause-menu map.
+ * Phase 5: drive the 6 GRIND around Ikoyi (south) and Ikorodu (north), get out of the car and walk
+ * as your own character, get back in, and share the road with other cars and danfo buses.
+ * The world is built in 100 m chunks around whoever the camera follows (the car, or the walker).
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -30,6 +30,8 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var groundModel: Model
     private lateinit var carModel: Model
     private lateinit var pedestrianModels: List<Model>
+    private lateinit var playerModel: Model
+    private lateinit var playerInstance: ModelInstance
     private lateinit var groundInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
     private lateinit var crowd: PedestrianCrowd
@@ -40,6 +42,8 @@ class LagosDriftGame : ApplicationAdapter() {
 
     private val glyphLayout = GlyphLayout()
     private val controller = CarController()
+    private val player = PlayerController()
+    private val traffic = TrafficManager()
     private val controls = TouchControls()
     private val mapRenderer = MapRenderer()
     private val mapView = MapView()
@@ -48,6 +52,14 @@ class LagosDriftGame : ApplicationAdapter() {
     private var viewMode = ChaseCamera.MODE_NEAR
     private var viewLabelTimer = 0f
     private var mapOpen = false
+
+    private var onFoot = false
+    private var hintText = ""
+    private var hintTimer = 0f
+    private var clock = 0f
+    private val focus = Vector3()
+    private var focusYaw = 0f
+    private val tmp = Vector3()
 
     private var screenWidth = 1f
     private var screenHeight = 1f
@@ -81,6 +93,11 @@ class LagosDriftGame : ApplicationAdapter() {
         groundInstance = ModelInstance(groundModel)
         carInstance = ModelInstance(carModel)
         crowd = PedestrianCrowd(pedestrianModels)
+        playerModel = PlayerModelFactory.load()
+        playerInstance = ModelInstance(playerModel)
+        traffic.create()
+        focus.set(controller.position)
+        traffic.populate(focus, controller.position)
 
         chunks = ChunkManager()
         chunks.preload(controller.position.x, controller.position.z)
@@ -121,16 +138,17 @@ class LagosDriftGame : ApplicationAdapter() {
 
     override fun render() {
         val delta = Gdx.graphics.deltaTime
+        clock += delta
 
         controls.mapMode = mapOpen
         controls.update()
         if (controls.mapTapped) {
             mapOpen = !mapOpen
             controls.mapMode = mapOpen
-            if (mapOpen) mapView.open(controller.position.x, controller.position.z)
+            if (mapOpen) mapView.open(focus.x, focus.z)
         }
         if (mapOpen) {
-            mapView.update(delta, controller.position.x, controller.position.z) { x, y -> controls.hitsButton(x, y) }
+            mapView.update(delta, focus.x, focus.z) { x, y -> controls.hitsButton(x, y) }
             if (mapView.closeRequested) {
                 mapOpen = false
                 controls.mapMode = false
@@ -142,6 +160,36 @@ class LagosDriftGame : ApplicationAdapter() {
             viewLabelTimer = 1.8f
         }
         if (viewLabelTimer > 0f) viewLabelTimer -= delta
+        if (hintTimer > 0f) hintTimer -= delta
+
+        // Get out of the car, or back in.
+        if (controls.actionTapped && !mapOpen) {
+            if (!onFoot) {
+                if (kotlin.math.abs(controller.speed) < EXIT_MAX_SPEED) {
+                    tmp.set(0f, 0f, -1f).rotate(Vector3.Y, controller.yawDegrees + 90f)
+                    player.place(
+                        controller.position.x + tmp.x * 2.4f,
+                        controller.position.z + tmp.z * 2.4f,
+                        controller.yawDegrees
+                    )
+                    TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
+                    onFoot = true
+                    controls.setOnFoot(true)
+                    showHint("Walk back to your car and press ENTER")
+                } else {
+                    showHint("Slow down to get out")
+                }
+            } else {
+                val dx = player.position.x - controller.position.x
+                val dz = player.position.z - controller.position.z
+                if (dx * dx + dz * dz <= ENTER_RANGE * ENTER_RANGE) {
+                    onFoot = false
+                    controls.setOnFoot(false)
+                } else {
+                    showHint("Too far from your car")
+                }
+            }
+        }
 
         // Zoom: pinch, or hold + / -. The map uses pinch for itself while it is open.
         var zoom = chaseCamera.zoom
@@ -152,15 +200,44 @@ class LagosDriftGame : ApplicationAdapter() {
 
         // The game pauses while the big map is open.
         if (!mapOpen) {
-            controller.update(delta, controls.steer, controls.throttle, controls.brake)
+            if (onFoot) {
+                // The car rolls to a stop by itself (no brake, so it never reverses).
+                controller.update(delta, 0f, false, false)
+                player.update(delta, controls.steer, controls.throttle, controls.brake)
+            } else {
+                controller.update(delta, controls.steer, controls.throttle, controls.brake)
+            }
             TownCollision.resolve(controller)
-            crowd.update(delta, controller.position)
+            traffic.collide(controller)
+            if (onFoot) {
+                TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
+                TownCollision.pushOutOfCar(player.position, PLAYER_RADIUS, controller.position, controller.yawDegrees)
+                traffic.pushOut(player.position, PLAYER_RADIUS)
+            }
         }
-        chunks.update(controller.position.x, controller.position.z)
+
+        if (onFoot) {
+            focus.set(player.position)
+            focusYaw = player.yawDegrees
+        } else {
+            focus.set(controller.position)
+            focusYaw = controller.yawDegrees
+        }
+
+        if (!mapOpen) {
+            traffic.update(delta, focus, controller.position, onFoot, player.position)
+            crowd.update(delta, focus)
+        }
+        chunks.update(focus.x, focus.z)
 
         carInstance.transform.setToRotation(Vector3.Y, controller.yawDegrees)
             .setTranslation(controller.position.x, controller.position.y + controller.bounceHeight, controller.position.z)
-        chaseCamera.update(controller.position, controller.yawDegrees, controller.speed, delta, viewMode)
+        if (onFoot) player.applyTo(playerInstance, clock)
+
+        val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else 1f
+        chaseCamera.distanceScale += (scaleTarget - chaseCamera.distanceScale) * minOf(1f, 4f * delta)
+        val followSpeed = if (onFoot) player.speed else controller.speed
+        chaseCamera.update(focus, focusYaw, followSpeed, delta, viewMode)
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
         Gdx.gl.glClearColor(SKY_R, SKY_G, SKY_B, 1f)
@@ -169,16 +246,19 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch.begin(camera)
         modelBatch.render(groundInstance, environment)
         chunks.render(modelBatch, environment, camera)
-        crowd.render(modelBatch, environment, controller.position)
+        crowd.render(modelBatch, environment, focus)
+        traffic.render(modelBatch, environment, camera, focus)
         modelBatch.render(carInstance, environment)
+        if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
 
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
 
+        val parked: Vector3? = if (onFoot) controller.position else null
         if (mapOpen) {
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawFull(shapeRenderer, mapView, controller.position, controller.yawDegrees)
+            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked)
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
         } else {
@@ -186,7 +266,7 @@ class LagosDriftGame : ApplicationAdapter() {
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawMini(shapeRenderer, controller.position, controller.yawDegrees, miniX, miniY, miniSize)
+            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked)
             shapeRenderer.end()
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
 
@@ -209,7 +289,8 @@ class LagosDriftGame : ApplicationAdapter() {
             glyphLayout.setText(font, "MAP   drag to scroll, pinch to zoom")
             font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
         } else {
-            glyphLayout.setText(font, "${controller.speedKmh.toInt()} km/h")
+            val speedText = if (onFoot) "on foot" else "${controller.speedKmh.toInt()} km/h"
+            glyphLayout.setText(font, speedText)
             font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, margin + glyphLayout.height)
 
             glyphLayout.setText(font, copyrightText)
@@ -223,6 +304,15 @@ class LagosDriftGame : ApplicationAdapter() {
                 margin + glyphLayout.height * 3f
             )
 
+            if (hintTimer > 0f) {
+                glyphLayout.setText(font, hintText)
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth / 2f - glyphLayout.width / 2f,
+                    screenHeight * 0.62f
+                )
+            }
+
             if (viewLabelTimer > 0f) {
                 glyphLayout.setText(font, "Camera: ${ChaseCamera.MODE_NAMES[viewMode]}")
                 font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
@@ -231,10 +321,16 @@ class LagosDriftGame : ApplicationAdapter() {
         spriteBatch.end()
     }
 
+    private fun showHint(text: String) {
+        hintText = text
+        hintTimer = 2.5f
+    }
+
     /** For example "IKORODU - broken road". */
     private fun placeText(): String {
-        val district = Districts.NAMES[Districts.at(controller.position.z)]
-        val road = when (controller.surface) {
+        val district = Districts.NAMES[Districts.at(focus.z)]
+        val surface = if (onFoot) RoadSurface.surfaceAt(focus.x, focus.z) else controller.surface
+        val road = when (surface) {
             TownLayout.SURFACE_SMOOTH -> "smooth road"
             TownLayout.SURFACE_WORN -> "worn road"
             TownLayout.SURFACE_POTHOLED -> "broken road"
@@ -249,6 +345,8 @@ class LagosDriftGame : ApplicationAdapter() {
         groundModel.dispose()
         chunks.dispose()
         carModel.dispose()
+        playerModel.dispose()
+        traffic.dispose()
         for (m in pedestrianModels) m.dispose()
         spriteBatch.dispose()
         shapeRenderer.dispose()
@@ -257,6 +355,10 @@ class LagosDriftGame : ApplicationAdapter() {
 
     private companion object {
         const val FAR_DISTANCE = 430f
+        const val EXIT_MAX_SPEED = 3f
+        const val ENTER_RANGE = 4.5f
+        const val PLAYER_RADIUS = 0.4f
+        const val ON_FOOT_CAMERA_SCALE = 0.42f
         const val SKY_R = 0.53f
         const val SKY_G = 0.81f
         const val SKY_B = 0.92f

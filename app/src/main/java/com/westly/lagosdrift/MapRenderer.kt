@@ -50,7 +50,10 @@ class MapRenderer {
     private var clipY1 = 1f
 
     /** Small map that turns so the car always points up. size is the square's side in pixels. */
-    fun drawMini(shapes: ShapeRenderer, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float) {
+    fun drawMini(
+        shapes: ShapeRenderer, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float,
+        parked: Vector3? = null
+    ) {
         rotating = true
         carX = car.x
         carZ = car.z
@@ -70,7 +73,9 @@ class MapRenderer {
         val reach = MINI_SPAN * 0.85f
         drawWorld(shapes, car.x - reach, car.x + reach, car.z - reach, car.z + reach)
 
-        // The car: always pointing up, with a white outline.
+        if (parked != null) parkedMarker(shapes, parked, size * 0.05f)
+
+        // The player: always pointing up, with a white outline.
         val s = size * 0.07f
         val cx = originX
         val cy = originY
@@ -91,7 +96,9 @@ class MapRenderer {
     }
 
     /** The big map, north at the top, showing whatever part of the world [view] is looking at. */
-    fun drawFull(shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float) {
+    fun drawFull(
+        shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float, parked: Vector3? = null
+    ) {
         val w = view.width
         val h = view.height
         shapes.setColor(0.04f, 0.06f, 0.09f, 1f)
@@ -114,7 +121,9 @@ class MapRenderer {
             view.centreZ - halfH, view.centreZ + halfH
         )
 
-        // The car, pointing the way it faces (north is up).
+        if (parked != null) parkedMarker(shapes, parked, h * 0.022f)
+
+        // The player, pointing the way they face (north is up).
         project(car.x, car.z)
         val rad = yawDegrees * MathUtils.degreesToRadians
         val dirX = -sin(rad)
@@ -124,6 +133,16 @@ class MapRenderer {
         val py = outY
         arrow(shapes, px, py, dirX, dirY, s * 1.25f, Color.WHITE)
         arrow(shapes, px, py, dirX, dirY, s, Color(0.9f, 0.1f, 0.1f, 1f))
+    }
+
+    /** A yellow square with a dark outline: the car you left parked. */
+    private fun parkedMarker(shapes: ShapeRenderer, parked: Vector3, half: Float) {
+        project(parked.x, parked.z)
+        if (outX < clipX0 || outX > clipX1 || outY < clipY0 || outY > clipY1) return
+        shapes.setColor(0.05f, 0.05f, 0.05f, 1f)
+        shapes.rect(outX - half * 1.25f, outY - half * 1.25f, half * 2.5f, half * 2.5f)
+        shapes.setColor(0.98f, 0.80f, 0.10f, 1f)
+        shapes.rect(outX - half, outY - half, half * 2f, half * 2f)
     }
 
     private fun arrow(shapes: ShapeRenderer, x: Float, y: Float, dirX: Float, dirY: Float, s: Float, color: Color) {
