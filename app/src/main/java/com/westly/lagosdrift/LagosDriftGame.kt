@@ -38,6 +38,8 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var environment: Environment
     private lateinit var carModel: Model
     private lateinit var roads: RoadWorld
+    private lateinit var traffic: TrafficManager
+    private var danfoModel: Model? = null
     private lateinit var playerModel: Model
     private lateinit var playerInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
@@ -139,6 +141,15 @@ class LagosDriftGame : ApplicationAdapter() {
         if (!resumed) grind.place(SPAWN_X, SPAWN_Z, SPAWN_YAW)
         focus.set(if (onFoot) player.position else grind.position)
         roads = RoadWorld(SKY_R, SKY_G, SKY_B)
+
+        // Passer-by traffic: Danfos and Camrys. If the Danfo cannot be loaded, the exception text is shown
+        // and the traffic is Camrys only.
+        try {
+            danfoModel = TrafficModelFactory.loadDanfo()
+        } catch (e: Exception) {
+            showHint("Danfo traffic car could not be loaded: $e", 30f)
+        }
+        traffic = TrafficManager(carModel, danfoModel)
         if (resumed) showHint("Welcome back - carrying on where you stopped", 5f)
     }
 
@@ -279,6 +290,12 @@ class LagosDriftGame : ApplicationAdapter() {
                 walkOnFoot(delta)
                 pushPlayerOutOfCar()
             }
+
+            // Traffic drives about, and bumps the car (and the walking player) but is never driven.
+            val subject = if (onFoot) player.position else grind.position
+            traffic.update(delta, subject.x, subject.z, grind.position.x, grind.position.z, grind.yawDegrees, grind.speed)
+            traffic.collide(grind)
+            if (onFoot && doorSequence == 0) traffic.pushOut(player.position, PLAYER_RADIUS)
         }
 
         if (onFoot) {
@@ -319,6 +336,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         modelBatch.begin(camera)
         roads.render(modelBatch, camera)
+        traffic.render(modelBatch, environment, camera)
         modelBatch.render(carInstance, environment)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
@@ -671,6 +689,7 @@ class LagosDriftGame : ApplicationAdapter() {
         if (::modelBatch.isInitialized) modelBatch.dispose()
         sky?.dispose()
         if (::roads.isInitialized) roads.dispose()
+        danfoModel?.dispose()
         if (::carModel.isInitialized) carModel.dispose()
         if (::playerModel.isInitialized) playerModel.dispose()
         if (::spriteBatch.isInitialized) spriteBatch.dispose()
