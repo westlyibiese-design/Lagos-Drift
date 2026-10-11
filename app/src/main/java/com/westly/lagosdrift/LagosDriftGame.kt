@@ -28,8 +28,9 @@ import kotlin.math.sqrt
  * Lagos Drift: one world, the Glen Canyon road with the Futatsugoya tunnel. You drive a 2006 Toyota
  * Camry (steering and rolling wheels), or get out and walk.
  *
- * The road is loaded and drawn by RoadWorld, and RoadGround knows its surface: the car follows it with
- * pitch and roll, the walking player stands on it, and neither can leave the road.
+ * The road is loaded and drawn by RoadWorld, and RoadGround knows its surface: the car rides over it on
+ * springs (it bounces, rocks and lands), the tunnel and the sand are rough, and CarAudio makes the sound.
+ * The walking player stands on the road and cannot leave it.
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -61,6 +62,8 @@ class LagosDriftGame : ApplicationAdapter() {
 
     private val glyphLayout = GlyphLayout()
     private val grind = CarController()
+    private val audio = CarAudio()
+    private var audioErrorShown = false
     private val parkedMarkers = ArrayList<Vector3>()
     private val player = PlayerController()
     private val controls = TouchControls()
@@ -152,6 +155,7 @@ class LagosDriftGame : ApplicationAdapter() {
             showHint("Danfo traffic car could not be loaded: $e", 30f)
         }
         traffic = TrafficManager(carModel, danfoModel)
+        audio.start()
         if (resumed) showHint("Welcome back - carrying on where you stopped", 5f)
     }
 
@@ -308,6 +312,18 @@ class LagosDriftGame : ApplicationAdapter() {
             traffic.update(delta, subject.x, subject.z, grind.position.x, grind.position.z, grind.yawDegrees, grind.speed)
             traffic.collide(grind)
             if (onFoot && doorSequence == 0) traffic.pushOut(player.position, PLAYER_RADIUS)
+        }
+
+        // The sound follows the car: the engine, the tyres, rough ground, knocks, and the echo in the tunnel.
+        audio.update(
+            !onFoot, grind.speed, controls.throttle && !mapOpen && !onFoot, grind.skidAmount,
+            grind.roughness, grind.isAirborne, RoadGround.inTunnel(grind.position.x, grind.position.z),
+            mapOpen, grind.takeImpact()
+        )
+        val audioError = audio.errorText
+        if (audioError != null && !audioErrorShown) {
+            audioErrorShown = true
+            showHint(audioError, 8f)
         }
 
         if (onFoot) {
@@ -625,6 +641,12 @@ class LagosDriftGame : ApplicationAdapter() {
     /** The game goes to the background (home button, another app, swiping it away): save where we are. */
     override fun pause() {
         saveGame()
+        audio.stop()
+    }
+
+    /** Back from the background: the sound starts again. */
+    override fun resume() {
+        if (fatalError == null && ::traffic.isInitialized) audio.start()
     }
 
     /** Front wheels steer with the steering, all four wheels roll with the speed. */
@@ -708,6 +730,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
     override fun dispose() {
         saveGame()
+        audio.stop()
         if (::modelBatch.isInitialized) modelBatch.dispose()
         sky?.dispose()
         if (::roads.isInitialized) roads.dispose()
