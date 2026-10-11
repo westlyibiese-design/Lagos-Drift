@@ -67,8 +67,8 @@ class PlayerController {
         forward.set(0f, 0f, -1f).rotate(Vector3.Y, yawDegrees)
         position.mulAdd(forward, speed * dt)
 
-        position.x = position.x.coerceIn(TownLayout.DRIVE_MIN_X, TownLayout.DRIVE_MAX_X)
-        position.z = position.z.coerceIn(TownLayout.DRIVE_MIN_Z, TownLayout.DRIVE_MAX_Z)
+        position.x = position.x.coerceIn(WorldLimits.MIN_X, WorldLimits.MAX_X)
+        position.z = position.z.coerceIn(WorldLimits.MIN_Z, WorldLimits.MAX_Z)
 
         if (jump && grounded) verticalSpeed = JUMP_SPEED
         if (!grounded || verticalSpeed > 0f) {
