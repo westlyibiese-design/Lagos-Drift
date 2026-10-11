@@ -56,6 +56,7 @@ object RoadGround {
     private const val KIND_GLEN = 1
     private const val KIND_TUNNEL = 2
     private const val KIND_TERRAIN = 3
+    private const val KIND_DECK = 4
 
     // The tunnel floor the car can always drive on, where the scan has holes: it covers the width of the
     // tunnel (sideways from the corridor axis) from the mouth to the end of the scanned floor.
@@ -72,6 +73,10 @@ object RoadGround {
 
     // The road pictures that are drivable asphalt (the material ids match the picture names).
     private val GLEN_ROAD_NUMBERS = arrayOf("06", "07", "09", "10", "11", "12")
+
+    // The concrete of the dam: the roadway on top of it (plain concrete, hazard stripes, paving). It is
+    // road like the asphalt, but only its flat faces count, so walls, rails and roofs are not ground.
+    private val GLEN_DECK_NUMBERS = arrayOf("05", "13", "15", "16", "18")
 
     // The desert sand (01) and the dirt ground (03) can be driven on. The lake (19), the canyon wall (02),
     // the bushes and the rest cannot.
@@ -177,6 +182,7 @@ object RoadGround {
         if (materialId.startsWith("m_glen_")) {
             val number = materialId.substring(7)
             for (n in GLEN_ROAD_NUMBERS) if (number == n) return KIND_GLEN
+            for (n in GLEN_DECK_NUMBERS) if (number == n) return KIND_DECK
             for (n in GLEN_TERRAIN_NUMBERS) if (number == n) return KIND_TERRAIN
         }
         return KIND_NONE
@@ -235,6 +241,8 @@ object RoadGround {
             val z3 = v[p2 + 2]
             if (kind == KIND_GLEN) {
                 if (normalY <= 0.6f) continue
+            } else if (kind == KIND_DECK) {
+                if (normalY <= 0.95f) continue    // only faces that are nearly level: the roadway, not the walls
             } else if (kind == KIND_TERRAIN) {
                 if (normalY <= 0.85f) continue    // steeper than about 32 degrees is a wall, not ground
             } else {
