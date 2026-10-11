@@ -408,6 +408,17 @@ class LagosDriftGame : ApplicationAdapter() {
             font.data.setScale(textScale)
             font.setColor(1f, 1f, 1f, 0.8f)
 
+            // Under the small map: the road picture is still being made, or the exact reason it could not be.
+            if (!mapBaker.ready) {
+                font.data.setScale(textScale * 0.6f)
+                font.setColor(1f, 1f, 1f, 0.8f)
+                font.draw(
+                    spriteBatch, mapBaker.errorText ?: "drawing map...",
+                    miniX, miniY - margin * 0.3f, miniSize * 2f, Align.left, true
+                )
+                font.data.setScale(textScale)
+            }
+
             // Where you are.
             glyphLayout.setText(font, placeText())
             font.draw(

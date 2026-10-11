@@ -54,7 +54,7 @@ class MapBaker {
         started = true
         val thread = Thread({ bake() }, "map-baker")
         thread.isDaemon = true
-        thread.priority = Thread.MIN_PRIORITY
+        thread.priority = Thread.NORM_PRIORITY - 1
         thread.start()
     }
 
