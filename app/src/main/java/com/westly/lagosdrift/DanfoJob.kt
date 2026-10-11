@@ -115,6 +115,9 @@ class DanfoJob(private val personModel: Model) {
     private val signs = Array(stops.size) { ModelInstance(signModel) }
     private var actionTimer = 0f
 
+    /** The stop where people just got off. Nobody gets on there until the danfo has driven away from it. */
+    private var noBoardStop = -1
+
     val mapStops: List<MapStop> = stops.map { MapStop(it.x, it.z) }
 
     var money = 0
@@ -140,7 +143,8 @@ class DanfoJob(private val personModel: Model) {
         if (messageTimer > 0f) messageTimer -= delta
 
         for (i in stops.indices) {
-            if (waiting[i] == 0) {
+            // Nobody queues at a stop that a passenger on board is travelling to.
+            if (waiting[i] == 0 && onBoard.none { it.destination == i }) {
                 refillTimer[i] -= delta
                 if (refillTimer[i] <= 0f) {
                     waiting[i] = 1 + rnd.nextInt(4)
@@ -151,6 +155,11 @@ class DanfoJob(private val personModel: Model) {
 
         refreshMapStops()
         if (danfo == null) return
+
+        if (noBoardStop >= 0) {
+            val q = stops[noBoardStop]
+            if (dist2(danfo.position.x, danfo.position.z, q.x, q.z) > BOARD_RANGE * BOARD_RANGE) noBoardStop = -1
+        }
 
         actionTimer -= delta
         if (actionTimer > 0f || abs(danfo.speed) > STOP_SPEED) return
@@ -171,14 +180,18 @@ class DanfoJob(private val personModel: Model) {
             money += fare
             say("+N$fare  (${s.name})")
             actionTimer = ACTION_DELAY
+            noBoardStop = near
             return
         }
+        // Where people just got off, nobody gets on.
+        if (near == noBoardStop) return
         if (waiting[near] > 0 && onBoard.size < CAPACITY) {
             waiting[near]--
             if (waiting[near] == 0) refillTimer[near] = REFILL_SECONDS
             syncPeople(near)
             val dest = pickDestination(near)
             onBoard.add(Passenger(dest, s.x, s.z))
+            clearDropOffs()
             say("Passenger going to ${stops[dest].name}")
             actionTimer = ACTION_DELAY
         } else if (waiting[near] > 0) {
@@ -258,7 +271,20 @@ class DanfoJob(private val personModel: Model) {
                 syncPeople(i)
             }
         }
+        clearDropOffs()
         refreshMapStops()
+    }
+
+    /** Stops that a passenger on board is travelling to have nobody waiting, so nobody gets on there. */
+    private fun clearDropOffs() {
+        for (p in onBoard) {
+            val i = p.destination
+            if (waiting[i] > 0) {
+                waiting[i] = 0
+                refillTimer[i] = REFILL_SECONDS
+                syncPeople(i)
+            }
+        }
     }
 
     private fun say(text: String) {
