@@ -1,6 +1,9 @@
 package com.westly.lagosdrift
 
+import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.graphics.Color
+import com.badlogic.gdx.graphics.GL20
+import com.badlogic.gdx.graphics.g2d.SpriteBatch
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.MathUtils
 import com.badlogic.gdx.math.Vector3
@@ -10,12 +13,21 @@ import kotlin.math.sqrt
 
 /**
  * Draws the flat maps: a small turning map in the corner and the big north-up map that scrolls and
- * zooms (see MapView). Both show the player's arrow and the Camry when it is left parked.
- * Call between shapeRenderer.begin(Filled) and end().
+ * zooms (see MapView). Both show the sand land, the road (the picture MapBaker baked, light grey), the
+ * player's arrow and the Camry when it is left parked.
+ *
+ * drawMini and drawFull open and close the ShapeRenderer and the SpriteBatch themselves (the road
+ * picture needs the batch), so call them while neither is begun. [drawFrame] is the exception: call it
+ * between shapeRenderer.begin(Filled) and end().
  */
-class MapRenderer {
+class MapRenderer(private val baker: MapBaker) {
     private val sand = Color(0.90f, 0.82f, 0.55f, 1f)
     private val bigBackground = Color(0.04f, 0.06f, 0.09f, 1f)
+    private val arrowRed = Color(0.9f, 0.1f, 0.1f, 1f)
+
+    // The road picture as one quad: 4 vertices of x, y, colour, u, v. Made once, reused every frame.
+    private val quad = FloatArray(20)
+    private val whiteBits = Color.WHITE.toFloatBits()
 
     // Current drawing mode, set by drawMini / drawFull.
     private var rotating = false
@@ -37,7 +49,7 @@ class MapRenderer {
 
     /** Small map that turns so the car always points up. size is the square's side in pixels. */
     fun drawMini(
-        shapes: ShapeRenderer, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float,
+        shapes: ShapeRenderer, batch: SpriteBatch, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float,
         parked: List<Vector3>? = null
     ) {
         rotating = true
@@ -54,9 +66,14 @@ class MapRenderer {
         clipX1 = x + size
         clipY1 = y + size
 
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
         shapes.setColor(sand)
         shapes.rect(x, y, size, size)
+        shapes.end()
 
+        drawRoad(batch)
+
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (parked != null) for (p in parked) parkedMarker(shapes, p, size * 0.05f)
 
         // The player: always pointing up, with a white outline.
@@ -67,6 +84,7 @@ class MapRenderer {
         shapes.triangle(cx, cy + s * 1.25f, cx - s * 0.8f, cy - s * 0.95f, cx + s * 0.8f, cy - s * 0.95f)
         shapes.setColor(0.9f, 0.1f, 0.1f, 1f)
         shapes.triangle(cx, cy + s, cx - s * 0.6f, cy - s * 0.7f, cx + s * 0.6f, cy - s * 0.7f)
+        shapes.end()
     }
 
     /** A thin frame round the small map. */
@@ -81,11 +99,12 @@ class MapRenderer {
 
     /** The big map, north at the top, showing whatever part of the world [view] is looking at. */
     fun drawFull(
-        shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float,
+        shapes: ShapeRenderer, batch: SpriteBatch, view: MapView, car: Vector3, yawDegrees: Float,
         parked: List<Vector3>? = null
     ) {
         val w = view.width
         val h = view.height
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
         shapes.setColor(bigBackground)
         shapes.rect(0f, 0f, w, h)
 
@@ -107,7 +126,11 @@ class MapRenderer {
         val right = outX.coerceIn(0f, w)
         val bottom = outY.coerceIn(0f, h)
         if (right > left && top > bottom) shapes.rect(left, bottom, right - left, top - bottom)
+        shapes.end()
 
+        drawRoad(batch)
+
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (parked != null) for (p in parked) parkedMarker(shapes, p, h * 0.022f)
 
         // The player, pointing the way they face (north is up).
@@ -119,7 +142,42 @@ class MapRenderer {
         val px = outX
         val py = outY
         arrow(shapes, px, py, dirX, dirY, s * 1.25f, Color.WHITE)
-        arrow(shapes, px, py, dirX, dirY, s, Color(0.9f, 0.1f, 0.1f, 1f))
+        arrow(shapes, px, py, dirX, dirY, s, arrowRed)
+        shapes.end()
+    }
+
+    /**
+     * Draws the baked road picture, in whatever mode (turning or north-up) was just set. The picture
+     * covers a world rectangle, so its four corners are projected and it is drawn as one quad. Nothing
+     * is drawn until MapBaker has made the picture.
+     */
+    private fun drawRoad(batch: SpriteBatch) {
+        val texture = baker.texture ?: return
+        val x0 = WorldLimits.MIN_X
+        val z0 = WorldLimits.MIN_Z
+        val x1 = x0 + MapBaker.COLS * MapBaker.CELL
+        val z1 = z0 + MapBaker.ROWS * MapBaker.CELL
+        // Row 0 of the picture is the north edge (z0), so (u, v) = (0, 0) is the corner (x0, z0).
+        corner(0, x0, z0, 0f, 0f)
+        corner(1, x0, z1, 0f, 1f)
+        corner(2, x1, z1, 1f, 1f)
+        corner(3, x1, z0, 1f, 0f)
+        batch.begin()
+        batch.draw(texture, quad, 0, quad.size)
+        batch.end()
+        // SpriteBatch.end() switches blending off; the buttons and the arrow drawn after this need it.
+        Gdx.gl.glEnable(GL20.GL_BLEND)
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+    }
+
+    private fun corner(index: Int, wx: Float, wz: Float, u: Float, v: Float) {
+        project(wx, wz)
+        val o = index * 5
+        quad[o] = outX
+        quad[o + 1] = outY
+        quad[o + 2] = whiteBits
+        quad[o + 3] = u
+        quad[o + 4] = v
     }
 
     /** A yellow square with a dark outline: your Camry, left parked. */

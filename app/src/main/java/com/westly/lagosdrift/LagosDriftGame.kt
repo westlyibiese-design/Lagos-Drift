@@ -64,7 +64,9 @@ class LagosDriftGame : ApplicationAdapter() {
     private val parkedMarkers = ArrayList<Vector3>()
     private val player = PlayerController()
     private val controls = TouchControls()
-    private val mapRenderer = MapRenderer()
+    private val mapBaker = MapBaker()
+    private val mapRenderer = MapRenderer(mapBaker)
+    private var bakeErrorShown = false
     private val mapView = MapView()
 
     private val copyrightText = "(c) Neribo Group"
@@ -192,11 +194,21 @@ class LagosDriftGame : ApplicationAdapter() {
             if (roads.isReady(focus.x, focus.z)) {
                 roadReady = true
                 settleOnGround()
+                // The whole network is read once in the background and baked into the map picture.
+                mapBaker.start()
             }
             renderLoading()
             return
         }
         clock += delta
+
+        // The road picture for the maps: made on this thread as soon as the background thread is done.
+        mapBaker.update()
+        val bakeError = mapBaker.errorText
+        if (bakeError != null && !bakeErrorShown) {
+            bakeErrorShown = true
+            showHint(bakeError, 30f)
+        }
 
         // Keep the saved game fresh in case the phone kills the game without warning.
         saveTimer += delta
@@ -349,17 +361,16 @@ class LagosDriftGame : ApplicationAdapter() {
         if (onFoot) parkedMarkers.add(grind.position)
         val parked: List<Vector3> = parkedMarkers
         if (mapOpen) {
+            // The map draws the sand, the road picture and the arrows (it opens and closes the renderers itself).
+            mapRenderer.drawFull(shapeRenderer, spriteBatch, mapView, focus, focusYaw, parked)
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked)
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
         } else {
             // The small map is cut off at its edges with a scissor box.
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked)
-            shapeRenderer.end()
+            mapRenderer.drawMini(shapeRenderer, spriteBatch, focus, focusYaw, miniX, miniY, miniSize, parked)
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
 
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
@@ -378,7 +389,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         if (mapOpen) {
             mapView.drawLabels(spriteBatch, font, glyphLayout, textScale)
-            glyphLayout.setText(font, "MAP   drag to scroll, pinch to zoom")
+            glyphLayout.setText(font, if (mapBaker.ready || mapBaker.errorText != null) MAP_TITLE else MAP_TITLE_BAKING)
             font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
         } else {
             val speedText = if (onFoot) "on foot" else "${grind.speedKmh.toInt()} km/h"
@@ -689,6 +700,7 @@ class LagosDriftGame : ApplicationAdapter() {
         if (::modelBatch.isInitialized) modelBatch.dispose()
         sky?.dispose()
         if (::roads.isInitialized) roads.dispose()
+        mapBaker.dispose()
         danfoModel?.dispose()
         if (::carModel.isInitialized) carModel.dispose()
         if (::playerModel.isInitialized) playerModel.dispose()
@@ -727,6 +739,9 @@ class LagosDriftGame : ApplicationAdapter() {
         const val SPAWN_X = RoadGround.JOIN_X - 100f * RoadGround.TUNNEL_DIR_X
         const val SPAWN_Z = RoadGround.JOIN_Z - 100f * RoadGround.TUNNEL_DIR_Z
         const val SPAWN_YAW = -3.8f
+
+        const val MAP_TITLE = "MAP   drag to scroll, pinch to zoom"
+        const val MAP_TITLE_BAKING = "MAP   drawing the road..."
 
         const val ROAD_CREDIT = "Road: Glen Canyon Dam by amogusstrikesback2 (CC BY 4.0)"
         const val TUNNEL_CREDIT = "Tunnel: Futatsugoya Tunnel by Fuji (CC BY 4.0)"
