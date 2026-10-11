@@ -11,6 +11,10 @@ import kotlin.math.sin
 /**
  * Four views of the car: near chase, far chase, hood (inside the car) and a slow orbit.
  * Pinch or the + and - buttons change zoom in every view except the hood view.
+ *
+ * Every height is measured from the car (or player), so the views follow hills. The camera is kept above
+ * the road surface, and inside the tunnel it is pulled closer and lower so it stays between the floor and
+ * the ceiling and does not poke through the walls.
  */
 class ChaseCamera(private val camera: PerspectiveCamera) {
     /** 1 = normal. Smaller is closer. */
@@ -25,6 +29,9 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
 
     /** While walking the camera keeps its own heading, so the stick can be read relative to the view. */
     var freeLook = false
+
+    /** Set by the game while the followed thing is inside the tunnel. */
+    var tunnelLimit = false
 
     private var cameraYaw = 0f
 
@@ -55,18 +62,24 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 camera.fieldOfView = 72f
                 forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
                 camera.position.set(carPosition).mulAdd(forward, -hoodBack)
-                camera.position.y = hoodHeight
+                camera.position.y = carPosition.y + hoodHeight
                 lookTarget.set(carPosition).mulAdd(forward, 20f)
-                lookTarget.y = 1.2f
+                lookTarget.y = carPosition.y + 1.2f
             }
             MODE_ORBIT -> {
                 if (!freeLook) cameraYaw = carYawDegrees
                 camera.fieldOfView = 65f
                 orbitAngle += 28f * delta
                 val a = orbitAngle * MathUtils.degreesToRadians
-                val d = 9.5f * zoom * distanceScale
+                var d = 9.5f * zoom * distanceScale
+                var rise = (3.2f * zoom + 0.8f) * distanceScale
+                if (tunnelLimit) {
+                    val s = min(1f, min(TUNNEL_MAX_SIDE / d, TUNNEL_MAX_RISE / rise))
+                    d *= s
+                    rise *= s
+                }
                 camera.position.set(
-                    carPosition.x + sin(a) * d, (3.2f * zoom + 0.8f) * distanceScale, carPosition.z + cos(a) * d
+                    carPosition.x + sin(a) * d, carPosition.y + rise, carPosition.z + cos(a) * d
                 )
                 lookTarget.set(carPosition).add(0f, 1f, 0f)
             }
@@ -81,12 +94,24 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 if (diff < -180f) diff += 360f
                 if (!freeLook) cameraYaw += diff * min(1f, 4f * delta)
 
-                val distance = (baseDistance + abs(speed) * 0.08f) * zoom * distanceScale
+                var distance = (baseDistance + abs(speed) * 0.08f) * zoom * distanceScale
+                var rise = height * zoom * distanceScale
+                if (tunnelLimit) {
+                    val s = min(1f, TUNNEL_MAX_RISE / rise)
+                    distance *= s
+                    rise *= s
+                }
                 forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
                 camera.position.set(carPosition).mulAdd(forward, -distance)
-                camera.position.y += height * zoom * distanceScale
+                camera.position.y += rise
                 lookTarget.set(carPosition).add(0f, 1f, 0f).mulAdd(forward, 4f * distanceScale)
             }
+        }
+
+        // Never below the road under the camera.
+        val ground = RoadGround.heightAt(camera.position.x, camera.position.z, carPosition.y + 3f)
+        if (!ground.isNaN() && camera.position.y < ground + MIN_GROUND_CLEARANCE) {
+            camera.position.y = ground + MIN_GROUND_CLEARANCE
         }
 
         camera.up.set(Vector3.Y)
@@ -100,6 +125,9 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
         const val MODE_HOOD = 2
         const val MODE_ORBIT = 3
         const val MODE_COUNT = 4
+        private const val MIN_GROUND_CLEARANCE = 0.5f
+        private const val TUNNEL_MAX_RISE = 5.2f     // the ceiling is about 7.7 m above the floor
+        private const val TUNNEL_MAX_SIDE = 4f       // the walls are about 5.2 m from the middle
         val MODE_NAMES = arrayOf("Near", "Far", "Hood", "Orbit")
     }
 }

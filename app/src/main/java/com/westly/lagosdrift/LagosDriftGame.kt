@@ -28,9 +28,8 @@ import kotlin.math.sqrt
  * Lagos Drift: one world, the Glen Canyon road with the Futatsugoya tunnel. You drive a 2006 Toyota
  * Camry (steering and rolling wheels), or get out and walk.
  *
- * The old towns, the Danfo job, the pedestrians and the old cars are gone. The road is loaded and
- * drawn by RoadWorld. The ground under the car comes later; until then the car is held at the height of
- * the road at the spawn point (ROAD_SPAWN_Y).
+ * The road is loaded and drawn by RoadWorld, and RoadGround knows its surface: the car follows it with
+ * pitch and roll, the walking player stands on it, and neither can leave the road.
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -52,6 +51,8 @@ class LagosDriftGame : ApplicationAdapter() {
     /** If the Camry cannot be loaded there is no other car: the exception text is shown and the game stops. */
     private var fatalError: String? = null
     private var roadReady = false
+    private var savedCarY = Float.NaN
+    private var savedPlayerY = Float.NaN
 
     private val wheelSteer = Quaternion()
     private val wheelRoll = Quaternion()
@@ -136,7 +137,6 @@ class LagosDriftGame : ApplicationAdapter() {
         // Carry on where the last game stopped, if there is one; otherwise start at the spawn point.
         val resumed = restoreGame()
         if (!resumed) grind.place(SPAWN_X, SPAWN_Z, SPAWN_YAW)
-        grind.position.y = ROAD_SPAWN_Y
         focus.set(if (onFoot) player.position else grind.position)
         roads = RoadWorld(SKY_R, SKY_G, SKY_B)
         if (resumed) showHint("Welcome back - carrying on where you stopped", 5f)
@@ -178,7 +178,10 @@ class LagosDriftGame : ApplicationAdapter() {
         if (!roadReady) {
             // Loading: read the road around the start before the first frame of the game.
             roads.update(delta, focus.x, focus.z, LOADING_BUDGET_MS)
-            if (roads.isReady(focus.x, focus.z)) roadReady = true
+            if (roads.isReady(focus.x, focus.z)) {
+                roadReady = true
+                settleOnGround()
+            }
             renderLoading()
             return
         }
@@ -224,6 +227,7 @@ class LagosDriftGame : ApplicationAdapter() {
                     seqFrom.set(grind.position.x + tmp.x * SEAT_SIDE, grind.position.y, grind.position.z + tmp.z * SEAT_SIDE)
                     seqTo.set(grind.position.x + tmp.x * CAR_EXIT_SIDE, grind.position.y, grind.position.z + tmp.z * CAR_EXIT_SIDE)
                     player.place(seqFrom.x, seqFrom.z, grind.yawDegrees + 90f)
+                    player.position.y = grind.position.y
                     doorSequence = 1
                     doorTimer = 0f
                     onFoot = true
@@ -287,7 +291,10 @@ class LagosDriftGame : ApplicationAdapter() {
 
         roads.update(delta, focus.x, focus.z, STREAM_BUDGET_MS)
 
+        // The car leans with the road: heading, then nose up/down, then side to side.
         carInstance.transform.setToRotation(Vector3.Y, grind.yawDegrees)
+            .rotate(Vector3.X, grind.pitchDegrees)
+            .rotate(Vector3.Z, grind.rollDegrees)
             .setTranslation(grind.position.x, grind.position.y, grind.position.z)
         updateWheels()
         carInstance.calculateTransforms()
@@ -296,6 +303,7 @@ class LagosDriftGame : ApplicationAdapter() {
         val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else 1f
         chaseCamera.distanceScale += (scaleTarget - chaseCamera.distanceScale) * minOf(1f, 4f * delta)
         val followSpeed = if (onFoot) player.speed else grind.speed
+        chaseCamera.tunnelLimit = RoadGround.inTunnel(focus.x, focus.z)
         chaseCamera.update(focus, focusYaw, followSpeed, delta, viewMode)
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
@@ -566,15 +574,12 @@ class LagosDriftGame : ApplicationAdapter() {
     }
 
     /** "GLEN CANYON ROAD" on the open road, "TUNNEL" inside the Futatsugoya tunnel. */
-    private fun placeText(): String = if (inTunnel(focus.x, focus.z)) "TUNNEL" else "GLEN CANYON ROAD"
+    private fun placeText(): String = if (RoadGround.inTunnel(focus.x, focus.z)) "TUNNEL" else "GLEN CANYON ROAD"
 
-    /** True inside the tunnel corridor: past the join, along the tunnel axis, within 6 m sideways. */
-    private fun inTunnel(x: Float, z: Float): Boolean {
-        val dx = x - JOIN_X
-        val dz = z - JOIN_Z
-        val along = dx * TUNNEL_DIR_X + dz * TUNNEL_DIR_Z
-        val side = dx * TUNNEL_DIR_Z - dz * TUNNEL_DIR_X
-        return along >= 0f && along <= TUNNEL_LENGTH && abs(side) <= TUNNEL_HALF_WIDTH
+    /** Once the road around the start is loaded: puts the car (and the player, if walking) on the road. */
+    private fun settleOnGround() {
+        if (!grind.settleOnGround(savedCarY)) showHint("Could not find the road under the car", 8f)
+        if (onFoot && !player.settleOnGround(savedPlayerY)) showHint("Could not find the road under you", 8f)
     }
 
     /** The game goes to the background (home button, another app, swiping it away): save where we are. */
@@ -602,10 +607,12 @@ class LagosDriftGame : ApplicationAdapter() {
         if (fatalError != null || !::chaseCamera.isInitialized) return
         var px = player.position.x
         var pz = player.position.z
+        var py = player.position.y
         var savedOnFoot = onFoot
         if (doorSequence == 1) {
             px = seqTo.x
             pz = seqTo.z
+            py = seqTo.y
         } else if (doorSequence == 2) {
             savedOnFoot = false
         }
@@ -613,9 +620,11 @@ class LagosDriftGame : ApplicationAdapter() {
         p.putInteger("version", SAVE_VERSION)
         p.putFloat("car_x", grind.position.x)
         p.putFloat("car_z", grind.position.z)
+        p.putFloat("car_y", grind.position.y)
         p.putFloat("car_yaw", grind.yawDegrees)
         p.putFloat("player_x", px)
         p.putFloat("player_z", pz)
+        p.putFloat("player_y", py)
         p.putFloat("player_yaw", player.yawDegrees)
         p.putBoolean("on_foot", savedOnFoot)
         p.putInteger("view", viewMode)
@@ -636,6 +645,9 @@ class LagosDriftGame : ApplicationAdapter() {
             values[1] < WorldLimits.MIN_Z || values[1] > WorldLimits.MAX_Z
         ) return false
 
+        // The heights are read when the road is loaded; a saved height tells the levels apart on bridges.
+        savedCarY = p.getFloat("car_y", Float.NaN)
+        savedPlayerY = p.getFloat("player_y", Float.NaN)
         grind.place(values[0], values[1], values[2])
         onFoot = p.getBoolean("on_foot")
         doorSequence = 0
@@ -672,7 +684,6 @@ class LagosDriftGame : ApplicationAdapter() {
         const val FAR_DISTANCE = 1100f
         const val LOADING_BUDGET_MS = 30    // milliseconds of loading work per frame on the start-up screen
         const val STREAM_BUDGET_MS = 6      // and while playing, so the game does not freeze
-        const val ROAD_SPAWN_Y = 22.4f      // road height at the spawn point; the ground system replaces this
         const val SAVE_NAME = "lagosdrift_save"
         const val SAVE_VERSION = 2          // 1 was the old three-world game; those saves are ignored
         const val SAVE_EVERY_SECONDS = 5f
@@ -694,17 +705,9 @@ class LagosDriftGame : ApplicationAdapter() {
 
         // Where the Camry starts: on the straight part, 100 m before the join with the tunnel,
         // facing the tunnel (south, yaw -3.8 degrees).
-        const val JOIN_X = -418.9f
-        const val JOIN_Z = -1238.5f
-        const val TUNNEL_DIR_X = 0.0666f
-        const val TUNNEL_DIR_Z = -0.9978f
-        const val SPAWN_X = JOIN_X - 100f * TUNNEL_DIR_X
-        const val SPAWN_Z = JOIN_Z - 100f * TUNNEL_DIR_Z
+        const val SPAWN_X = RoadGround.JOIN_X - 100f * RoadGround.TUNNEL_DIR_X
+        const val SPAWN_Z = RoadGround.JOIN_Z - 100f * RoadGround.TUNNEL_DIR_Z
         const val SPAWN_YAW = -3.8f
-
-        // The tunnel corridor: 740 m along the axis from the join, 6 m to each side.
-        const val TUNNEL_LENGTH = 740f
-        const val TUNNEL_HALF_WIDTH = 6f
 
         const val ROAD_CREDIT = "Road: Glen Canyon Dam by amogusstrikesback2 (CC BY 4.0)"
         const val TUNNEL_CREDIT = "Tunnel: Futatsugoya Tunnel by Fuji (CC BY 4.0)"

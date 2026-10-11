@@ -13,6 +13,9 @@ import kotlin.math.sin
  * character turns to face the way it walks, like a person, and can jump. The yaw follows the
  * car's rule: 0 faces -Z and a positive yaw turns left.
  *
+ * The feet follow the road: the height under them comes from RoadGround, and the player cannot walk
+ * off the road surface. Walking up and down slopes and a jump both work.
+ *
  * The model is baked in nine pieces (see HumanPose): the legs swing from the hips and bend at the
  * knees, the arms swing from the shoulders, and the body gives a small bob and sway.
  */
@@ -27,20 +30,36 @@ class PlayerController {
         private set
 
     private var verticalSpeed = 0f
+    private var groundY = 0f
     private var pose: HumanPose? = null
     private var phase = 0f
     private val forward = Vector3()
+    private val found = Vector3()
 
     private val grounded: Boolean
-        get() = position.y <= 0.001f
+        get() = position.y <= groundY + 0.02f && verticalSpeed <= 0.01f
 
-    /** Puts the player somewhere, facing a direction, standing still. */
+    /** Puts the player somewhere, facing a direction, standing still. The height stays as it was. */
     fun place(x: Float, z: Float, yaw: Float) {
-        position.set(x, 0f, z)
+        position.x = x
+        position.z = z
         yawDegrees = yaw
         speed = 0f
         verticalSpeed = 0f
         phase = 0f
+    }
+
+    /**
+     * Puts the feet on the road at (or near) where the player stands. [knownY] is the height from a saved
+     * game; leave it NaN otherwise. Returns false when there is no road within a few metres.
+     */
+    fun settleOnGround(knownY: Float = Float.NaN): Boolean {
+        val refY = if (knownY.isNaN()) HIGH_REFERENCE else knownY + 0.5f
+        if (!RoadGround.findNearestRoad(position.x, position.z, SPAWN_SEARCH_RADIUS, refY, found)) return false
+        position.set(found.x, found.y, found.z)
+        groundY = found.y
+        verticalSpeed = 0f
+        return true
     }
 
     /**
@@ -64,18 +83,34 @@ class PlayerController {
         speed += (target - speed) * min(1f, 9f * dt)
         if (abs(speed) < 0.02f && target == 0f) speed = 0f
 
+        // Walk, but only where there is road: slide along an edge instead of stepping off it.
         forward.set(0f, 0f, -1f).rotate(Vector3.Y, yawDegrees)
-        position.mulAdd(forward, speed * dt)
+        val oldX = position.x
+        val oldZ = position.z
+        val newX = (oldX + forward.x * speed * dt).coerceIn(WorldLimits.MIN_X, WorldLimits.MAX_X)
+        val newZ = (oldZ + forward.z * speed * dt).coerceIn(WorldLimits.MIN_Z, WorldLimits.MAX_Z)
+        if (hasRoad(newX, newZ)) {
+            position.x = newX
+            position.z = newZ
+        } else if (hasRoad(newX, oldZ)) {
+            position.x = newX
+        } else if (hasRoad(oldX, newZ)) {
+            position.z = newZ
+        }
 
-        position.x = position.x.coerceIn(WorldLimits.MIN_X, WorldLimits.MAX_X)
-        position.z = position.z.coerceIn(WorldLimits.MIN_Z, WorldLimits.MAX_Z)
-
+        // The feet follow the road height, and a jump leaves it and comes back down.
+        val ground = RoadGround.heightAt(position.x, position.z, position.y, MAX_DROP)
+        if (!ground.isNaN()) groundY = ground
         if (jump && grounded) verticalSpeed = JUMP_SPEED
-        if (!grounded || verticalSpeed > 0f) {
+        if (grounded) {
+            // Standing or walking: stay on the surface, climbing slopes smoothly.
+            position.y += (groundY - position.y) * min(1f, 25f * dt)
+            if (abs(groundY - position.y) < 0.001f) position.y = groundY
+        } else {
             verticalSpeed -= GRAVITY * dt
             position.y += verticalSpeed * dt
-            if (position.y <= 0f) {
-                position.y = 0f
+            if (position.y <= groundY) {
+                position.y = groundY
                 verticalSpeed = 0f
             }
         }
@@ -113,6 +148,8 @@ class PlayerController {
         instance.calculateTransforms()
     }
 
+    private fun hasRoad(x: Float, z: Float): Boolean = RoadGround.isRoad(x, z, position.y, MAX_DROP)
+
     private fun wrap(angle: Float): Float {
         var a = angle
         while (a > 180f) a -= 360f
@@ -126,6 +163,9 @@ class PlayerController {
         const val TURN_RATE = 560f       // degrees per second
         const val JUMP_SPEED = 5.2f
         const val GRAVITY = 15f
+        const val MAX_DROP = 1.5f             // no road more than this below the feet counts as road
+        const val SPAWN_SEARCH_RADIUS = 15f
+        const val HIGH_REFERENCE = 10000f
         const val TWO_PI = 6.2831855f
     }
 }

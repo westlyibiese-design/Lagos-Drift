@@ -33,7 +33,8 @@ private const val STATE_FAILED = 3
  *
  * The pictures already contain their light, so the road has its own Environment: white ambient
  * light and no sunlight, plus haze in the sky colour. Chunks are drawn double-sided, and each one
- * is skipped when it is behind the camera or beyond the draw distance.
+ * is skipped when it is behind the camera or beyond the draw distance. When a chunk is ready its
+ * drivable triangles are handed to RoadGround, and taken away again when the chunk is freed.
  */
 class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
     private class Chunk(
@@ -144,9 +145,13 @@ class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
             refresh(x, z)
         }
         manager.update(budgetMs)
+        // At most one chunk is turned into a model (and its ground read) per frame, so there is no hitch.
         for (i in 0 until chunks.size) {
             val c = chunks[i]
-            if (c.state == STATE_LOADING && manager.isLoaded(c.path)) makeInstance(c)
+            if (c.state == STATE_LOADING && manager.isLoaded(c.path)) {
+                makeInstance(c)
+                break
+            }
         }
     }
 
@@ -160,6 +165,7 @@ class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
                 manager.load(c.path, Model::class.java, parameters)
                 c.state = STATE_LOADING
             } else if (c.state != STATE_IDLE && d > UNLOAD_RADIUS) {
+                RoadGround.remove(c.path)
                 manager.unload(c.path)
                 c.instance = null
                 c.state = STATE_IDLE
@@ -169,11 +175,18 @@ class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
 
     private fun makeInstance(c: Chunk) {
         try {
-            val instance = ModelInstance(manager.get(c.path, Model::class.java))
+            val model = manager.get(c.path, Model::class.java)
+            val instance = ModelInstance(model)
             // The materials are double-sided: no face culling.
             for (m in instance.materials) m.set(IntAttribute.createCullFace(GL20.GL_NONE))
             c.instance = instance
             c.state = STATE_READY
+            // The drivable triangles of this chunk join the ground.
+            try {
+                RoadGround.addModel(c.path, model)
+            } catch (e: Exception) {
+                report("Road ground error (${c.path}): ${describe(e)}")
+            }
         } catch (e: Exception) {
             report("Road model error (${c.path}): ${describe(e)}")
             c.state = STATE_FAILED
@@ -217,6 +230,7 @@ class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
 
     fun dispose() {
         for (i in 0 until chunks.size) chunks[i].instance = null
+        RoadGround.clear()
         manager.dispose()
     }
 
