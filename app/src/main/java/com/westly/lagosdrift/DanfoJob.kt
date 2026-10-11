@@ -1,5 +1,6 @@
 package com.westly.lagosdrift
 
+import com.badlogic.gdx.Preferences
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.PerspectiveCamera
 import com.badlogic.gdx.graphics.g3d.Environment
@@ -101,7 +102,7 @@ class MapStop(val x: Float, val z: Float) {
  * Driving the danfo for money. People wait at the stops. Stop the danfo close to a stop and they get
  * on, one by one. Each passenger has a stop to get off at; stop there and they pay the fare.
  */
-class DanfoJob(private val pedestrianModels: List<Model>) {
+class DanfoJob(private val personModel: Model) {
     private class Passenger(val destination: Int, val fromX: Float, val fromZ: Float)
 
     private val stops = BusStops.all
@@ -226,6 +227,40 @@ class DanfoJob(private val pedestrianModels: List<Model>) {
         signModel.dispose()
     }
 
+    /** Writes the money earned, the passengers on board and the people waiting, so a game can be resumed. */
+    fun save(p: Preferences) {
+        p.putInteger("job_money", money)
+        p.putInteger("job_count", onBoard.size)
+        for (i in onBoard.indices) {
+            p.putInteger("job_dest_$i", onBoard[i].destination)
+            p.putFloat("job_fx_$i", onBoard[i].fromX)
+            p.putFloat("job_fz_$i", onBoard[i].fromZ)
+        }
+        val sb = StringBuilder()
+        for (n in waiting) sb.append(n).append(',')
+        p.putString("job_waiting", sb.toString())
+    }
+
+    /** Reads what [save] wrote. Anything that does not fit this town is ignored. */
+    fun load(p: Preferences) {
+        money = p.getInteger("job_money", 0).coerceAtLeast(0)
+        onBoard.clear()
+        val count = p.getInteger("job_count", 0).coerceIn(0, CAPACITY)
+        for (i in 0 until count) {
+            val dest = p.getInteger("job_dest_$i", -1)
+            if (dest in stops.indices) onBoard.add(Passenger(dest, p.getFloat("job_fx_$i", 0f), p.getFloat("job_fz_$i", 0f)))
+        }
+        val saved = p.getString("job_waiting", "").split(',').filter { it.isNotEmpty() }
+        if (saved.size == stops.size) {
+            for (i in stops.indices) {
+                waiting[i] = (saved[i].toIntOrNull() ?: waiting[i]).coerceIn(0, 6)
+                if (waiting[i] == 0) refillTimer[i] = REFILL_SECONDS
+                syncPeople(i)
+            }
+        }
+        refreshMapStops()
+    }
+
     private fun say(text: String) {
         message = text
         messageTimer = 2.2f
@@ -276,7 +311,8 @@ class DanfoJob(private val pedestrianModels: List<Model>) {
         val s = stops[i]
         while (list.size > waiting[i]) list.removeAt(list.size - 1)
         while (list.size < waiting[i]) {
-            val inst = ModelInstance(pedestrianModels[rnd.nextInt(pedestrianModels.size)])
+            val inst = ModelInstance(personModel)
+            val height = PeopleLook.dress(inst, rnd)
             val k = list.size
             val along = (k - 1.5f) * 0.9f
             // Spread the group along the road edge.
@@ -290,6 +326,7 @@ class DanfoJob(private val pedestrianModels: List<Model>) {
                 pz = s.peopleZ
             }
             inst.transform.setToTranslation(px, 0.12f, pz).rotate(Vector3.Y, s.faceYaw + (rnd.nextFloat() - 0.5f) * 40f)
+                .scale(height, height, height)
             inst.calculateTransforms()
             list.add(inst)
         }

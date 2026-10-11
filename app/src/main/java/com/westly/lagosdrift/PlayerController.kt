@@ -13,8 +13,8 @@ import kotlin.math.sin
  * character turns to face the way it walks, like a person, and can jump. The yaw follows the
  * car's rule: 0 faces -Z and a positive yaw turns left.
  *
- * The model has no skeleton, but it is baked in three pieces: the body and two legs. The legs swing
- * from the hips, one forward while the other goes back, and the body gives a small bob and sway.
+ * The model is baked in nine pieces (see HumanPose): the legs swing from the hips and bend at the
+ * knees, the arms swing from the shoulders, and the body gives a small bob and sway.
  */
 class PlayerController {
     val position = Vector3()
@@ -27,6 +27,7 @@ class PlayerController {
         private set
 
     private var verticalSpeed = 0f
+    private var pose: HumanPose? = null
     private var phase = 0f
     private val forward = Vector3()
 
@@ -95,7 +96,7 @@ class PlayerController {
         val lean = 4f * moving
         val breath = 1f + 0.012f * sin(time * 2.2f) * (1f - min(moving, 1f))
         val squash = 1f + 0.01f * cos(phase * 2f) * min(moving, 1f)
-        val stretch = if (onGround) 1f else 1.07f
+        val stretch = if (onGround) 1f else 1.02f
         val s = PlayerModelFactory.SCALE
 
         instance.transform.idt()
@@ -105,10 +106,10 @@ class PlayerController {
             .rotate(Vector3.X, -lean)
             .scale(s / squash, s * squash * breath * stretch, s / squash)
 
-        // Legs swing from the hips. A positive turn about X moves the foot forward (-Z).
-        val swing = if (onGround) sin(phase) * LEG_SWING * min(moving, 1.3f) else AIR_LEG
-        instance.getNode(PlayerModelFactory.LEG_A)?.rotation?.set(Vector3.X, swing)
-        instance.getNode(PlayerModelFactory.LEG_B)?.rotation?.set(Vector3.X, -swing)
+        // Legs, knees, arms and elbows follow the walking cycle; a jump has its own pose.
+        val cached = pose
+        val p = if (cached != null && cached.instance === instance) cached else HumanPose(instance).also { pose = it }
+        p.update(phase, moving, !onGround)
         instance.calculateTransforms()
     }
 
@@ -126,7 +127,5 @@ class PlayerController {
         const val JUMP_SPEED = 5.2f
         const val GRAVITY = 15f
         const val TWO_PI = 6.2831855f
-        const val LEG_SWING = 32f        // degrees each way at a walk
-        const val AIR_LEG = 20f          // legs apart while jumping
     }
 }

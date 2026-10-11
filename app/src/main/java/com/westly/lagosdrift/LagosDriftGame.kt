@@ -30,7 +30,6 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var environment: Environment
     private lateinit var groundModel: Model
     private lateinit var carModel: Model
-    private lateinit var pedestrianModels: List<Model>
     private lateinit var playerModel: Model
     private lateinit var playerInstance: ModelInstance
     private lateinit var groundInstance: ModelInstance
@@ -82,6 +81,7 @@ class LagosDriftGame : ApplicationAdapter() {
     private var hintText = ""
     private var hintTimer = 0f
     private var clock = 0f
+    private var saveTimer = 0f
     private val focus = Vector3()
     private var focusYaw = 0f
     private val tmp = Vector3()
@@ -114,26 +114,33 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch = ModelBatch()
         groundModel = GroundModelFactory.build()
         carModel = CarModelFactory.build(withDoor = true)
-        pedestrianModels = PedestrianModelFactory.buildAll()
+        // One human model is shared by the player, the people on the pavements and the bus-stop crowds.
+        playerModel = PlayerModelFactory.load()
         groundInstance = ModelInstance(groundModel)
         carInstance = ModelInstance(carModel)
         danfoModel = TrafficModelFactory.buildDanfo()
         danfoInstance = ModelInstance(danfoModel)
         danfoDoorModel = TrafficModelFactory.buildDanfoDoor()
         danfoDoorInstance = ModelInstance(danfoDoorModel)
-        job = DanfoJob(pedestrianModels)
+        job = DanfoJob(playerModel)
         // Your danfo waits in Ikorodu, 40 m north of the border road, facing north.
         danfo.place(3f, -40f, 0f)
-        crowd = PedestrianCrowd(pedestrianModels)
-        playerModel = PlayerModelFactory.load()
+        crowd = PedestrianCrowd(playerModel)
         playerInstance = ModelInstance(playerModel)
         traffic.create()
-        focus.set(controller.position)
+
+        // Carry on where the last game stopped, if there is one.
+        val resumed = restoreGame()
+        focus.set(if (onFoot) player.position else controller.position)
         traffic.populate(focus, vehiclePositions)
-        showHint("Your danfo is parked in Ikorodu - find the yellow square on the map", 8f)
+        if (resumed) {
+            showHint("Welcome back - carrying on where you stopped", 5f)
+        } else {
+            showHint("Your danfo is parked in Ikorodu - find the yellow square on the map", 8f)
+        }
 
         chunks = ChunkManager()
-        chunks.preload(controller.position.x, controller.position.z)
+        chunks.preload(focus.x, focus.z)
 
         spriteBatch = SpriteBatch()
         shapeRenderer = ShapeRenderer()
@@ -172,6 +179,13 @@ class LagosDriftGame : ApplicationAdapter() {
     override fun render() {
         val delta = Gdx.graphics.deltaTime
         clock += delta
+
+        // Keep the saved game fresh in case the phone kills the game without warning.
+        saveTimer += delta
+        if (saveTimer >= SAVE_EVERY_SECONDS) {
+            saveTimer = 0f
+            saveGame()
+        }
 
         controls.mapMode = mapOpen
         controls.update()
@@ -579,7 +593,82 @@ class LagosDriftGame : ApplicationAdapter() {
         return "$district - $road"
     }
 
+    /** The game goes to the background (home button, another app, swiping it away): save where we are. */
+    override fun pause() {
+        saveGame()
+    }
+
+    /**
+     * Writes everything needed to carry on later: where the vehicles and the player are, whether
+     * you are walking or driving (and which vehicle), the camera, and the danfo work.
+     * A door sequence that is half done is saved as if it had finished.
+     */
+    private fun saveGame() {
+        if (!::job.isInitialized || !::chaseCamera.isInitialized) return
+        var savedOnFoot = onFoot
+        var savedVehicle = controller
+        var px = player.position.x
+        var pz = player.position.z
+        if (doorSequence == 1) {
+            px = seqTo.x
+            pz = seqTo.z
+        } else if (doorSequence == 2) {
+            savedOnFoot = false
+            savedVehicle = seqVehicle ?: controller
+        }
+        val p = Gdx.app.getPreferences(SAVE_NAME)
+        p.putInteger("version", SAVE_VERSION)
+        p.putFloat("grind_x", grind.position.x)
+        p.putFloat("grind_z", grind.position.z)
+        p.putFloat("grind_yaw", grind.yawDegrees)
+        p.putFloat("danfo_x", danfo.position.x)
+        p.putFloat("danfo_z", danfo.position.z)
+        p.putFloat("danfo_yaw", danfo.yawDegrees)
+        p.putFloat("player_x", px)
+        p.putFloat("player_z", pz)
+        p.putFloat("player_yaw", player.yawDegrees)
+        p.putBoolean("on_foot", savedOnFoot)
+        p.putBoolean("drive_danfo", savedVehicle === danfo)
+        p.putInteger("view", viewMode)
+        p.putFloat("zoom", chaseCamera.zoom)
+        job.save(p)
+        p.flush()
+    }
+
+    /** Puts everything back the way [saveGame] left it. Returns false when there is no usable save. */
+    private fun restoreGame(): Boolean {
+        val p = Gdx.app.getPreferences(SAVE_NAME)
+        if (p.getInteger("version", 0) != SAVE_VERSION) return false
+        val values = floatArrayOf(
+            p.getFloat("grind_x"), p.getFloat("grind_z"), p.getFloat("grind_yaw"),
+            p.getFloat("danfo_x"), p.getFloat("danfo_z"), p.getFloat("danfo_yaw"),
+            p.getFloat("player_x"), p.getFloat("player_z"), p.getFloat("player_yaw")
+        )
+        for (v in values) if (v.isNaN() || v.isInfinite()) return false
+
+        grind.place(values[0], values[1], values[2])
+        danfo.place(values[3], values[4], values[5])
+        controller = if (p.getBoolean("drive_danfo")) danfo else grind
+        viewMode = p.getInteger("view", viewMode).coerceIn(0, ChaseCamera.MODE_COUNT - 1)
+        chaseCamera.zoom = p.getFloat("zoom", 1f).coerceIn(0.5f, 2.5f)
+        onFoot = p.getBoolean("on_foot")
+        if (onFoot) {
+            player.place(values[6], values[7], values[8])
+            chaseCamera.freeLook = true
+            controls.setOnFoot(true)
+        } else {
+            chaseCamera.freeLook = false
+            controls.setOnFoot(false)
+            applyVehicleCamera()
+        }
+        chaseCamera.distanceScale =
+            if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
+        job.load(p)
+        return true
+    }
+
     override fun dispose() {
+        saveGame()
         modelBatch.dispose()
         groundModel.dispose()
         chunks.dispose()
@@ -589,7 +678,6 @@ class LagosDriftGame : ApplicationAdapter() {
         job.dispose()
         playerModel.dispose()
         traffic.dispose()
-        for (m in pedestrianModels) m.dispose()
         spriteBatch.dispose()
         shapeRenderer.dispose()
         font.dispose()
@@ -597,6 +685,9 @@ class LagosDriftGame : ApplicationAdapter() {
 
     private companion object {
         const val FAR_DISTANCE = 430f
+        const val SAVE_NAME = "lagosdrift_save"
+        const val SAVE_VERSION = 1
+        const val SAVE_EVERY_SECONDS = 5f
         const val EXIT_MAX_SPEED = 3f
         const val DOOR_ANGLE = 70f        // how far the driver's door swings open
         const val DOOR_TIME = 0.35f       // seconds to open or close

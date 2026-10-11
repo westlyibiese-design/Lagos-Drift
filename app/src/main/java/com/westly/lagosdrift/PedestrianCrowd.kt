@@ -4,24 +4,20 @@ import com.badlogic.gdx.graphics.g3d.Environment
 import com.badlogic.gdx.graphics.g3d.Model
 import com.badlogic.gdx.graphics.g3d.ModelBatch
 import com.badlogic.gdx.graphics.g3d.ModelInstance
-import com.badlogic.gdx.graphics.g3d.model.Node
 import com.badlogic.gdx.math.MathUtils
 import com.badlogic.gdx.math.Vector3
 import kotlin.math.atan2
-import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * People strolling up and down the pavements, swinging their arms and legs.
+ * People strolling up and down the pavements, swinging their arms and legs. They all use the one
+ * human model, each with its own colour wash and height.
  * The world is big, so the crowd lives around the car: when a person is left far behind they
  * start again on a pavement near the car. There are more people on the unpaved roads of Ikorodu.
  * They walk to the end of their pavement, turn round and come back. They do not react to the car yet.
  */
-class PedestrianCrowd(models: List<Model>) {
-    private class Walker(
-        val instance: ModelInstance,
-        val legL: Node, val legR: Node, val armL: Node, val armR: Node
-    ) {
+class PedestrianCrowd(model: Model) {
+    private class Walker(val instance: ModelInstance, val pose: HumanPose, val scale: Float) {
         var way: TownLayout.Walkway? = null
         var along = 0f
         var direction = 1f
@@ -41,14 +37,9 @@ class PedestrianCrowd(models: List<Model>) {
 
     init {
         repeat(COUNT) {
-            val instance = ModelInstance(models[rnd.nextInt(models.size)])
-            walkers.add(
-                Walker(
-                    instance,
-                    instance.getNode("legL"), instance.getNode("legR"),
-                    instance.getNode("armL"), instance.getNode("armR")
-                )
-            )
+            val instance = ModelInstance(model)
+            val scale = PeopleLook.dress(instance, rnd)
+            walkers.add(Walker(instance, HumanPose(instance), scale))
         }
     }
 
@@ -141,15 +132,11 @@ class PedestrianCrowd(models: List<Model>) {
             val yaw = atan2(-dirX, -dirZ) * MathUtils.radiansToDegrees
 
             w.phase += delta * w.speed * 4.5f
-            val swing = sin(w.phase) * 38f
-            w.legL.rotation.set(Vector3.X, swing)
-            w.legR.rotation.set(Vector3.X, -swing)
-            w.armL.rotation.set(Vector3.X, -swing * 0.8f)
-            w.armR.rotation.set(Vector3.X, swing * 0.8f)
+            w.pose.update(w.phase, WALK_AMOUNT, false)
 
             w.x = x
             w.z = z
-            w.instance.transform.setToTranslation(x, 0.12f, z).rotate(Vector3.Y, yaw)
+            w.instance.transform.setToTranslation(x, 0.12f, z).rotate(Vector3.Y, yaw).scale(w.scale, w.scale, w.scale)
             w.instance.calculateTransforms()
         }
     }
@@ -166,6 +153,7 @@ class PedestrianCrowd(models: List<Model>) {
 
     private companion object {
         const val COUNT = 40
+        const val WALK_AMOUNT = 0.75f
         const val DRAW_DISTANCE = 190f
         const val DESPAWN_DISTANCE = 230f
         const val MIN_SPAWN_DISTANCE = 30f
