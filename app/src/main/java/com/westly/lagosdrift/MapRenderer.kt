@@ -101,7 +101,7 @@ class MapRenderer {
     /** The big map, north at the top, showing whatever part of the world [view] is looking at. */
     fun drawFull(
         shapes: ShapeRenderer, view: MapView, car: Vector3, yawDegrees: Float,
-        parked: List<Vector3>? = null, stops: List<MapStop>? = null
+        parked: List<Vector3>? = null, stops: List<MapStop>? = null, showPlayer: Boolean = true
     ) {
         val w = view.width
         val h = view.height
@@ -128,7 +128,8 @@ class MapRenderer {
         if (stops != null) for (s in stops) stopMarker(shapes, s, h * 0.016f)
         if (parked != null) for (p in parked) parkedMarker(shapes, p, h * 0.022f)
 
-        // The player, pointing the way they face (north is up).
+        // The player, pointing the way they face (north is up). Not shown while the map looks at another world.
+        if (!showPlayer) return
         project(car.x, car.z)
         val rad = yawDegrees * MathUtils.degreesToRadians
         val dirX = -sin(rad)

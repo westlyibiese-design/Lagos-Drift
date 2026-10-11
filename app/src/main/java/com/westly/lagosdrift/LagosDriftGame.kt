@@ -54,6 +54,7 @@ class LagosDriftGame : ApplicationAdapter() {
     private val skies = arrayOfNulls<SkyDome>(Districts.WORLD_COUNT)
     private val crowds = arrayOfNulls<PedestrianCrowd>(Districts.WORLD_COUNT)
     private var sky: SkyDome? = null
+    private var dam: DamModel? = null
     private var world = Districts.WORLD_LAGOS
     private var usingCamry = false
     private var clearR = 0.53f
@@ -233,17 +234,20 @@ class LagosDriftGame : ApplicationAdapter() {
         if (controls.mapTapped) {
             mapOpen = !mapOpen
             controls.mapMode = mapOpen
-            if (mapOpen) mapView.open(focus.x, focus.z)
+            if (mapOpen) mapView.open(world, focus.x, focus.z)
         }
         if (mapOpen) {
-            mapView.update(delta, focus.x, focus.z) { x, y -> controls.hitsButton(x, y) }
+            mapView.update(delta, world, focus.x, focus.z) { x, y -> controls.hitsButton(x, y) }
             if (mapView.closeRequested) {
                 mapOpen = false
                 controls.mapMode = false
+            } else if (mapView.travelRequested) {
+                // TRAVEL HERE: close the map and go to the pin, in whichever world it is.
+                mapOpen = false
+                controls.mapMode = false
+                travelTo(mapView.pinWorld, mapView.pinX, mapView.pinZ)
             }
         }
-
-        if (controls.travelTapped && !mapOpen) travel()
 
         if (controls.cameraTapped) {
             viewMode = (viewMode + 1) % ChaseCamera.MODE_COUNT
@@ -392,6 +396,7 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch.begin(camera)
         modelBatch.render(groundInstance, environment)
         chunks.render(modelBatch, environment, camera)
+        if (world == Districts.WORLD_DESERT) dam?.render(modelBatch, environment, camera)
         crowd.render(modelBatch, environment, focus)
         if (world == Districts.WORLD_LAGOS) {
             traffic.render(modelBatch, environment, camera, focus)
@@ -413,10 +418,21 @@ class LagosDriftGame : ApplicationAdapter() {
         if (world == Districts.WORLD_LAGOS && (onFoot || controller !== danfo)) parkedMarkers.add(danfo.position)
         val parked: List<Vector3> = parkedMarkers
         if (mapOpen) {
+            // The map can look at any world. TownLayout is switched to it only while the map is drawn.
+            val viewWorld = mapView.mapWorld
+            val here = viewWorld == world
+            val mapParked: List<Vector3>? = when {
+                here -> parked
+                viewWorld == Districts.WORLD_LAGOS -> listOf(danfo.position)
+                else -> null
+            }
+            val mapStops: List<MapStop>? = if (viewWorld == Districts.WORLD_LAGOS) job.mapStops else null
+            if (!here) TownLayout.select(viewWorld)
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked, stopsForMap())
+            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, mapParked, mapStops, here)
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
+            if (!here) TownLayout.select(world)
         } else {
             // The small map is cut off at its edges with a scissor box.
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
@@ -442,7 +458,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         if (mapOpen) {
             mapView.drawLabels(spriteBatch, font, glyphLayout, textScale)
-            glyphLayout.setText(font, "MAP   drag to scroll, pinch to zoom")
+            glyphLayout.setText(font, "MAP   drag to scroll, pinch to zoom, tap to drop a pin")
             font.draw(spriteBatch, glyphLayout, screenWidth / 2f - glyphLayout.width / 2f, screenHeight - margin)
         } else {
             val speedText = if (onFoot) "on foot" else "${controller.speedKmh.toInt()} km/h"
@@ -461,6 +477,20 @@ class LagosDriftGame : ApplicationAdapter() {
                     spriteBatch, glyphLayout,
                     screenWidth - safeRight - margin - glyphLayout.width,
                     screenHeight - margin - glyphLayout.height * 2.6f
+                )
+                font.data.setScale(textScale)
+                font.setColor(1f, 1f, 1f, 0.8f)
+            }
+
+            // The dam's licence asks for its author to be named.
+            if (world == Districts.WORLD_DESERT && dam != null) {
+                font.data.setScale(textScale * 0.7f)
+                font.setColor(1f, 1f, 1f, 0.6f)
+                glyphLayout.setText(font, DamModel.CREDIT)
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth - safeRight - margin - glyphLayout.width,
+                    screenHeight - margin - glyphLayout.height * 4.2f
                 )
                 font.data.setScale(textScale)
                 font.setColor(1f, 1f, 1f, 0.8f)
@@ -687,14 +717,33 @@ class LagosDriftGame : ApplicationAdapter() {
 
     // ------------------------------------------------------------------ worlds
 
-    /** The GO button: carry on to the next world (Lagos, then Neribo City, then Neribo Desert, then Lagos again). */
-    private fun travel() {
-        if (doorSequence != 0) return
-        if (world == Districts.WORLD_LAGOS && job.passengerCount > 0) {
-            showHint("Drop your passengers first")
+    /**
+     * TRAVEL HERE on the map: go to a pin in [target] world. Whatever you are using (the car you drive,
+     * or yourself while walking) is put at the pin; the rest of the world stays as you left it.
+     */
+    private fun travelTo(target: Int, x: Float, z: Float) {
+        if (doorSequence != 0) {
+            showHint("Finish getting in or out first")
             return
         }
-        switchWorld((world + 1) % Districts.WORLD_COUNT)
+        val tx = x.coerceIn(TownLayout.DRIVE_MIN_X, TownLayout.DRIVE_MAX_X)
+        val tz = z.coerceIn(TownLayout.DRIVE_MIN_Z, TownLayout.DRIVE_MAX_Z)
+        if (target != world) {
+            switchWorld(target, tx, tz)
+            return
+        }
+        placeAtPin(tx, tz)
+        focus.set(if (onFoot) player.position else controller.position)
+        chunks.preload(focus.x, focus.z)
+        if (world == Districts.WORLD_LAGOS) traffic.populate(focus, vehiclePositions)
+        showHint("Travelled to ${Districts.nameAt(tz)}", 3f)
+        saveGame()
+    }
+
+    /** Puts you (on foot) or the vehicle you drive at a spot, keeping the way it faces. */
+    private fun placeAtPin(x: Float, z: Float) {
+        hasWalkTarget = false
+        if (onFoot) player.place(x, z, player.yawDegrees) else controller.place(x, z, controller.yawDegrees)
     }
 
     /** Remembers where the car and the player are in the current world. */
@@ -754,18 +803,21 @@ class LagosDriftGame : ApplicationAdapter() {
             if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
     }
 
-    private fun switchWorld(target: Int) {
+    private fun switchWorld(target: Int, destX: Float? = null, destZ: Float? = null) {
         captureState()
         world = target
         TownLayout.select(target)
         loadState(target)
+        if (destX != null && destZ != null) placeAtPin(destX, destZ)
         focus.set(if (onFoot) player.position else controller.position)
         applyWorldLook()
         chunks.dispose()
         chunks = ChunkManager()
         chunks.preload(focus.x, focus.z)
         if (target == Districts.WORLD_LAGOS) traffic.populate(focus, vehiclePositions)
-        when (target) {
+        if (destX != null) {
+            showHint("Travelled to ${Districts.WORLD_NAMES[target]}", 4f)
+        } else when (target) {
             Districts.WORLD_CITY -> showHint("Neribo City - your house is at the end of the driveway", 6f)
             Districts.WORLD_DESERT -> showHint("Neribo Desert - the old highway runs north and south", 6f)
             else -> showHint("Lagos - back where you left off", 4f)
@@ -796,6 +848,7 @@ class LagosDriftGame : ApplicationAdapter() {
                 environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.58f, 0.52f, 1f))
                 sun.set(1.0f, 0.92f, 0.78f, 0.42f, -0.71f, -0.57f)
                 sky = skies[world] ?: SkyDome("sky/sky_desert.jpg").also { skies[world] = it }
+                if (dam == null) dam = try { DamModel() } catch (e: Exception) { null }
             }
             else -> {
                 environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.60f, 1f))
@@ -910,6 +963,7 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch.dispose()
         groundModel.dispose()
         for (sk in skies) sk?.dispose()
+        dam?.dispose()
         chunks.dispose()
         carModel.dispose()
         danfoModel.dispose()
