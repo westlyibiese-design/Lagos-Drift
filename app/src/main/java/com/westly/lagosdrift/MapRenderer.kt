@@ -21,6 +21,8 @@ class MapRenderer {
     private val ikoyiLand = Color(0.17f, 0.46f, 0.22f, 1f)
     private val ikoroduLand = Color(0.36f, 0.42f, 0.20f, 1f)
     private val sand = Color(0.90f, 0.82f, 0.55f, 1f)
+    private val cityLand = Color(0.17f, 0.46f, 0.22f, 1f)
+    private val desertLand = Color(0.72f, 0.60f, 0.38f, 1f)
     private val water = Color(0.34f, 0.46f, 0.60f, 1f)
     private val ikoyiBlock = Color(0.92f, 0.95f, 0.98f, 1f)
     private val ikoroduBlock = Color(0.95f, 0.86f, 0.66f, 1f)
@@ -179,14 +181,19 @@ class MapRenderer {
     /** Draws the part of the world inside the given world rectangle. */
     private fun drawWorld(shapes: ShapeRenderer, minWx: Float, maxWx: Float, minWz: Float, maxWz: Float) {
         // Land by district, then the beach and the lagoon on the east side.
-        shapes.setColor(ikoyiLand)
-        fillRect(shapes, TownLayout.MIN_X, Districts.BORDER_Z, TownLayout.BEACH_X0, TownLayout.MAX_Z)
-        shapes.setColor(ikoroduLand)
-        fillRect(shapes, TownLayout.MIN_X, TownLayout.MIN_Z, TownLayout.BEACH_X0, Districts.BORDER_Z)
-        shapes.setColor(sand)
-        fillRect(shapes, TownLayout.BEACH_X0, TownLayout.MIN_Z, TownLayout.BEACH_X1, TownLayout.MAX_Z)
-        shapes.setColor(water)
-        fillRect(shapes, TownLayout.BEACH_X1, TownLayout.MIN_Z, TownLayout.MAX_X + 2000f, TownLayout.MAX_Z)
+        if (TownLayout.world == Districts.WORLD_LAGOS) {
+            shapes.setColor(ikoyiLand)
+            fillRect(shapes, TownLayout.MIN_X, Districts.BORDER_Z, TownLayout.BEACH_X0, TownLayout.MAX_Z)
+            shapes.setColor(ikoroduLand)
+            fillRect(shapes, TownLayout.MIN_X, TownLayout.MIN_Z, TownLayout.BEACH_X0, Districts.BORDER_Z)
+            shapes.setColor(sand)
+            fillRect(shapes, TownLayout.BEACH_X0, TownLayout.MIN_Z, TownLayout.BEACH_X1, TownLayout.MAX_Z)
+            shapes.setColor(water)
+            fillRect(shapes, TownLayout.BEACH_X1, TownLayout.MIN_Z, TownLayout.MAX_X + 2000f, TownLayout.MAX_Z)
+        } else {
+            shapes.setColor(if (TownLayout.world == Districts.WORLD_DESERT) desertLand else cityLand)
+            fillRect(shapes, TownLayout.MIN_X, TownLayout.MIN_Z, TownLayout.MAX_X + 2000f, TownLayout.MAX_Z)
+        }
 
         val cx0 = TownLayout.cxOf(minWx).coerceIn(0, TownLayout.CHUNKS_X - 1)
         val cx1 = TownLayout.cxOf(maxWx).coerceIn(0, TownLayout.CHUNKS_X - 1)
@@ -204,7 +211,7 @@ class MapRenderer {
                         fillRect(shapes, h.cx - h.hw, h.cz - h.hd, h.cx + h.hw, h.cz + h.hd)
                     }
                 } else if (chunk.houses.size >= 5) {
-                    shapes.setColor(if (chunk.district == Districts.IKOYI) ikoyiBlock else ikoroduBlock)
+                    shapes.setColor(if (Districts.isModern(chunk.district)) ikoyiBlock else ikoroduBlock)
                     fillRect(shapes, chunk.minX + 3f, chunk.minZ + 3f, chunk.minX + TownLayout.CHUNK - 3f, chunk.minZ + TownLayout.CHUNK - 3f)
                 }
             }

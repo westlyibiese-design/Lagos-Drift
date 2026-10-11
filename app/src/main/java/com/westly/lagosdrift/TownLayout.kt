@@ -1,7 +1,9 @@
 package com.westly.lagosdrift
 
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.random.Random
 
 /**
@@ -11,6 +13,10 @@ import kotlin.random.Random
  *
  * North is -Z. Ikoyi is the south half (z > 0) and Ikorodu the north half (z < 0). The beach
  * and lagoon are on the east side. The layout is fixed (same seeds every run).
+ *
+ * There are three worlds in the same 1500 x 1600 m frame (see Districts): Lagos, Neribo City and
+ * Neribo Desert. [select] switches which one the rest of the game sees. Each world is built once,
+ * the first time it is chosen, and kept, so going back to a world gives the very same objects.
  */
 object TownLayout {
     const val MIN_X = -800f
@@ -43,6 +49,25 @@ object TownLayout {
     const val TYPE_SHOP = 2
     const val TYPE_TOWER = 3
     const val TYPE_STALL = 4
+    const val TYPE_VILLA = 5     // the player's house
+    const val TYPE_GARAGE = 6    // the player's garage
+    const val TYPE_POOL = 7      // a swimming pool or fountain: a low blue slab
+
+    // The player's house in Neribo City, and where the car waits on the driveway (it faces east).
+    const val HOME_X = 512f
+    const val HOME_Z = -229f
+    const val HOME_CAR_X = 487f
+    const val HOME_CAR_Z = -212f
+    const val HOME_CAR_YAW = -90f
+    private const val HOME_BLOCK_X0 = 455f
+    private const val HOME_BLOCK_Z0 = -295f
+    private const val HOME_BLOCK_X1 = 595f
+    private const val HOME_BLOCK_Z1 = -155f
+
+    // Where the car starts in the desert: on the old highway, just south of the crossroads, facing north.
+    const val DESERT_CAR_X = 3f
+    const val DESERT_CAR_Z = 60f
+    const val DESERT_CAR_YAW = 0f
 
     private const val ROAD_X_MIN = -760f
     private const val ROAD_X_MAX = 640f
@@ -74,7 +99,7 @@ object TownLayout {
         val wallColor: Int, val roofColor: Int, val accent: Int, val district: Int
     )
 
-    /** kind: 0 = round-crowned tree, 1 = palm. */
+    /** kind: 0 = round-crowned tree, 1 = palm, 2 = cactus, 3 = dry bush, 4 = rock. */
     class Tree(val x: Float, val z: Float, val scale: Float, val kind: Int, val leafColor: Int)
 
     /** A straight line that pedestrians walk along. paved = a real pavement is drawn there. */
@@ -105,18 +130,83 @@ object TownLayout {
 
     private class Plan(val type: Int, val halfWidth: Float, val halfDepth: Float, val height: Float)
 
-    // The order of these lines matters: each list uses the ones above it.
-    val roads: List<Road> = buildRoads()
+    // What the current world holds. These change when [select] is called. While a world is being
+    // built the order matters: each list uses the ones before it.
+    var roads: List<Road> = emptyList()
+        private set
+    var houses: List<House> = emptyList()
+        private set
+    var trees: List<Tree> = emptyList()
+        private set
+    var lamps: List<Lamp> = emptyList()
+        private set
+    var walkways: List<Walkway> = emptyList()
+        private set
+    var potholes: List<Pothole> = emptyList()
+        private set
+    var chunks: Array<Chunk> = arrayOf()
+        private set
+
+    /** Which world is selected (Districts.WORLD_LAGOS, WORLD_CITY or WORLD_DESERT). */
+    var world: Int = Districts.WORLD_LAGOS
+        private set
+
     private val houseGrid = HashMap<Int, ArrayList<House>>()
-    val houses: List<House> = buildHouses()
-    val trees: List<Tree> = buildTrees()
-    val lamps: List<Lamp> = buildLamps()
-    val walkways: List<Walkway> = buildWalkways()
-    val potholes: List<Pothole> = buildPotholes()
-    val chunks: Array<Chunk> = Array(CHUNKS_X * CHUNKS_Z) { Chunk(it % CHUNKS_X, it / CHUNKS_X) }
+
+    /** Rectangles (x0, z0, x1, z1) where no ordinary building or random tree may go. */
+    private var reserved: List<FloatArray> = emptyList()
+
+    private class Snapshot(
+        val roads: List<Road>, val houses: List<House>, val trees: List<Tree>, val lamps: List<Lamp>,
+        val walkways: List<Walkway>, val potholes: List<Pothole>, val chunks: Array<Chunk>
+    )
+
+    private val snapshots = arrayOfNulls<Snapshot>(Districts.WORLD_COUNT)
 
     init {
+        select(Districts.WORLD_LAGOS)
+    }
+
+    /** Makes [target] the world everything else reads from, building it the first time. */
+    fun select(target: Int) {
+        val w = target.coerceIn(0, Districts.WORLD_COUNT - 1)
+        val saved = snapshots[w]
+        if (saved == null) {
+            generate(w)
+            snapshots[w] = Snapshot(roads, houses, trees, lamps, walkways, potholes, chunks)
+        } else {
+            roads = saved.roads
+            houses = saved.houses
+            trees = saved.trees
+            lamps = saved.lamps
+            walkways = saved.walkways
+            potholes = saved.potholes
+            chunks = saved.chunks
+        }
+        world = w
+        Districts.world = w
+    }
+
+    private fun generate(w: Int) {
+        Districts.world = w
+        houseGrid.clear()
+        reserved = emptyList()
+        when (w) {
+            Districts.WORLD_CITY -> generateCity()
+            Districts.WORLD_DESERT -> generateDesert()
+            else -> generateLagos()
+        }
+        chunks = Array(CHUNKS_X * CHUNKS_Z) { Chunk(it % CHUNKS_X, it / CHUNKS_X) }
         fillChunks()
+    }
+
+    private fun generateLagos() {
+        roads = buildRoads()
+        houses = buildHouses()
+        trees = buildTrees()
+        lamps = buildLamps()
+        walkways = buildWalkways()
+        potholes = buildPotholes()
     }
 
     fun cxOf(x: Float): Int = floor((x - MIN_X) / CHUNK).toInt()
@@ -209,6 +299,9 @@ object TownLayout {
     ): Boolean {
         if (cx - hw < MIN_X + 30f || cx + hw > BEACH_X0 - 6f) return false
         if (cz - hd < MIN_Z + 30f || cz + hd > MAX_Z - 30f) return false
+        for (z in reserved) {
+            if (cx + hw > z[0] && cx - hw < z[2] && cz + hd > z[1] && cz - hd < z[3]) return false
+        }
         for (r in roads) {
             if (cx + hw + roadMargin > r.x0 && cx - hw - roadMargin < r.x1 &&
                 cz + hd + roadMargin > r.z0 && cz - hd - roadMargin < r.z1
@@ -242,7 +335,10 @@ object TownLayout {
     private fun makeHouse(
         rnd: Random, plan: Plan, district: Int, cx: Float, cz: Float, hw: Float, hd: Float, fx: Int, fz: Int
     ): House {
-        val wall = if (district == Districts.IKOYI) {
+        val wall = if (district == Districts.CITY) {
+            // Neribo City palette: the first four are towers and offices, the rest are homes.
+            if (plan.type == TYPE_TOWER) rnd.nextInt(4) else 4 + rnd.nextInt(4)
+        } else if (district == Districts.IKOYI) {
             if (plan.type == TYPE_TOWER) (if (rnd.nextBoolean()) 3 else 5)
             else intArrayOf(0, 0, 1, 1, 2, 4)[rnd.nextInt(6)]
         } else {
@@ -347,6 +443,9 @@ object TownLayout {
     // ---------------------------------------------------------------- trees
 
     private fun treeBlocked(x: Float, z: Float, margin: Float): Boolean {
+        for (r in reserved) {
+            if (x > r[0] - margin && x < r[2] + margin && z > r[1] - margin && z < r[3] + margin) return true
+        }
         if (onOtherRoad(x, z, null, margin)) return true
         return hitsHouse(x, z, 0.2f, 0.2f, margin)
     }
@@ -362,7 +461,7 @@ object TownLayout {
                 var t = road.start + 10f + rnd.nextFloat() * 10f
                 while (t < road.end - 10f) {
                     val probeZ = if (road.vertical) t else road.centre
-                    val ikoyi = Districts.at(probeZ) == Districts.IKOYI
+                    val ikoyi = Districts.isModern(Districts.at(probeZ))
                     val lateral = road.half + if (ikoyi) 4.6f else 3.2f
                     val x = if (road.vertical) road.centre + side * lateral else t
                     val z = if (road.vertical) t else road.centre + side * lateral
@@ -385,7 +484,7 @@ object TownLayout {
             attempts++
             val x = MIN_X + 20f + rnd.nextFloat() * (BEACH_X0 - 10f - MIN_X - 20f)
             val z = MIN_Z + 20f + rnd.nextFloat() * (MAX_Z - MIN_Z - 40f)
-            val ikoyi = Districts.at(z) == Districts.IKOYI
+            val ikoyi = Districts.isModern(Districts.at(z))
             if (!ikoyi && rnd.nextInt(10) < 5) continue
             if (treeBlocked(x, z, 3f)) continue
             val scale = 0.8f + rnd.nextFloat() * 0.7f
@@ -407,7 +506,7 @@ object TownLayout {
                 var t = road.start + 20f + if (side > 0) 0f else 24f
                 while (t < road.end - 10f) {
                     val probeZ = if (road.vertical) t else road.centre
-                    val ikoyi = Districts.at(probeZ) == Districts.IKOYI
+                    val ikoyi = Districts.isModern(Districts.at(probeZ))
                     val step = if (ikoyi) 48f else 110f
                     val lateral = road.half + 2.7f
                     val x = if (road.vertical) road.centre + side * lateral else t
@@ -462,7 +561,7 @@ object TownLayout {
 
     // ---------------------------------------------------------------- potholes
 
-    private fun buildPotholes(): List<Pothole> {
+    private fun buildPotholes(density: Float = 1f): List<Pothole> {
         val rnd = Random(909)
         val list = ArrayList<Pothole>()
         for (road in roads) {
@@ -473,7 +572,7 @@ object TownLayout {
                 else -> 0f
             }
             if (perMetre == 0f) continue
-            val count = (road.length * perMetre).toInt()
+            val count = (road.length * perMetre * density).toInt()
             repeat(count) {
                 val along = road.start + 8f + rnd.nextFloat() * (road.length - 16f)
                 val across = (rnd.nextFloat() * 2f - 1f) * (road.half - 0.9f)
@@ -485,6 +584,268 @@ object TownLayout {
             }
         }
         return list
+    }
+
+    // ---------------------------------------------------------------- shared by the new worlds
+
+    /**
+     * Puts one building beside a road, if there is room, and adds it to the grid used for overlap
+     * checks. [t] is where along the road the plot starts. Returns null when it does not fit.
+     */
+    private fun roadsideHouse(
+        rnd: Random, road: Road, side: Int, t: Float, plan: Plan, setback: Float, district: Int
+    ): House? {
+        val along = plan.halfWidth
+        val tc = t + along
+        val offset = road.half + setback + plan.halfDepth
+        val cx: Float
+        val cz: Float
+        val hw: Float
+        val hd: Float
+        val fx: Int
+        val fz: Int
+        if (road.vertical) {
+            cx = road.centre + side * offset
+            cz = tc
+            hw = plan.halfDepth
+            hd = along
+            fx = -side
+            fz = 0
+        } else {
+            cx = tc
+            cz = road.centre + side * offset
+            hw = along
+            hd = plan.halfDepth
+            fx = 0
+            fz = -side
+        }
+        if (!fits(cx, cz, hw, hd, 3f, 2f)) return null
+        val house = makeHouse(rnd, plan, district, cx, cz, hw, hd, fx, fz)
+        addToGrid(house)
+        return house
+    }
+
+    // ---------------------------------------------------------------- Neribo City
+
+    /** A tidy grid of wide smooth roads. The two main boulevards cross at the middle (x = 0, z = 0). */
+    private fun buildCityRoads(): List<Road> {
+        val list = ArrayList<Road>()
+        val lines = floatArrayOf(-600f, -450f, -300f, -150f, 0f, 150f, 300f, 450f, 600f)
+        for (x in lines) {
+            val half = if (x == 0f) 8f else if (abs(x) == 300f) 6f else 5f
+            list.add(Road(true, x, half, ROAD_Z_MIN, ROAD_Z_MAX, SURFACE_SMOOTH))
+        }
+        for (z in lines) {
+            val half = if (z == 0f) 8f else if (abs(z) == 300f) 6f else 5f
+            list.add(Road(false, z, half, ROAD_X_MIN, ROAD_X_MAX, SURFACE_SMOOTH))
+        }
+        return list
+    }
+
+    /** Towers in the middle, then shops and flats, then houses and bungalows toward the edge. */
+    private fun cityPlan(rnd: Random, x: Float, z: Float): Plan {
+        val d = max(abs(x), abs(z))
+        val roll = rnd.nextInt(100)
+        if (d < 330f) {
+            return when {
+                roll < 60 -> Plan(
+                    TYPE_TOWER, 8f + rnd.nextFloat() * 4f, 8f + rnd.nextFloat() * 4f, 24f + 4f * rnd.nextInt(6)
+                )
+                roll < 80 -> Plan(TYPE_SHOP, 8f + rnd.nextFloat() * 2f, 6f + rnd.nextFloat(), 6f)
+                else -> Plan(TYPE_HOUSE, 7f + rnd.nextFloat() * 3f, 6.5f + rnd.nextFloat() * 2.5f, 7.4f)
+            }
+        }
+        if (d < 480f) {
+            return when {
+                roll < 20 -> Plan(
+                    TYPE_TOWER, 7.5f + rnd.nextFloat() * 3f, 7.5f + rnd.nextFloat() * 3f, 18f + 4f * rnd.nextInt(4)
+                )
+                roll < 45 -> Plan(TYPE_SHOP, 8f + rnd.nextFloat() * 2f, 6f + rnd.nextFloat(), 5f)
+                else -> Plan(TYPE_HOUSE, 7f + rnd.nextFloat() * 3f, 6.5f + rnd.nextFloat() * 2.5f, 7.4f)
+            }
+        }
+        return if (roll < 55) {
+            Plan(TYPE_HOUSE, 7f + rnd.nextFloat() * 3f, 6.5f + rnd.nextFloat() * 2.5f, 7.4f)
+        } else {
+            Plan(TYPE_BUNGALOW, 6f + rnd.nextFloat() * 2f, 6f + rnd.nextFloat() * 2f, 4f)
+        }
+    }
+
+    private fun buildCityHouses(): List<House> {
+        val rnd = Random(31)
+        val list = ArrayList<House>()
+        for (road in roads) {
+            for (side in intArrayOf(-1, 1)) {
+                var t = road.start + 14f
+                while (t < road.end - 14f) {
+                    val probeX = if (road.vertical) road.centre else t
+                    val probeZ = if (road.vertical) t else road.centre
+                    val plan = cityPlan(rnd, probeX, probeZ)
+                    val core = max(abs(probeX), abs(probeZ)) < 330f
+                    val setback = if (core) 6f + rnd.nextFloat() * 4f else 11f + rnd.nextFloat() * 5f
+                    val placeAt = t
+                    t += plan.halfWidth * 2f + if (core) 3f + rnd.nextFloat() * 5f else 8f + rnd.nextFloat() * 10f
+                    val house = roadsideHouse(rnd, road, side, placeAt, plan, setback, Districts.CITY) ?: continue
+                    list.add(house)
+                }
+            }
+        }
+        return list
+    }
+
+    /** The player's house: a villa with a garage, a pool, and a driveway from the road to the garage door. */
+    private fun addHome(list: ArrayList<House>) {
+        val villa = House(512f, -229f, 15f, 11f, 7.6f, -1, 0, TYPE_VILLA, 0, 0, 3, Districts.CITY)
+        val garage = House(506f, -212f, 9f, 6f, 3.8f, -1, 0, TYPE_GARAGE, 3, 0, 0, Districts.CITY)
+        val pool = House(512f, -253f, 9f, 5f, 0.5f, 0, 1, TYPE_POOL, 0, 0, 0, Districts.CITY)
+        for (h in listOf(villa, garage, pool)) {
+            list.add(h)
+            addToGrid(h)
+        }
+    }
+
+    private fun homeTrees(): List<Tree> {
+        val list = ArrayList<Tree>()
+        // Palms either side of the driveway.
+        val palmX = floatArrayOf(465f, 478f, 491f)
+        for (x in palmX) {
+            list.add(Tree(x, -221f, 1.2f, 1, 0))
+            list.add(Tree(x, -203f, 1.2f, 1, 0))
+        }
+        // Shade trees round the garden.
+        val gx = floatArrayOf(545f, 560f, 540f, 570f, 470f, 470f)
+        val gz = floatArrayOf(-190f, -250f, -275f, -215f, -270f, -170f)
+        for (i in gx.indices) list.add(Tree(gx[i], gz[i], 1.1f + 0.1f * (i % 3), 0, i % 2))
+        return list
+    }
+
+    /** Four fountain pools and rows of trees in the park round the middle crossing. */
+    private fun plazaFeatures(list: ArrayList<House>): List<Tree> {
+        val result = ArrayList<Tree>()
+        val spots = floatArrayOf(30f, 55f, 100f, 120f)
+        var n = 0
+        for (sx in intArrayOf(-1, 1)) {
+            for (sz in intArrayOf(-1, 1)) {
+                val fountain = House(sx * 75f, sz * 75f, 7f, 7f, 0.5f, 0, 1, TYPE_POOL, 1, 0, 0, Districts.CITY)
+                list.add(fountain)
+                addToGrid(fountain)
+                for (a in spots) {
+                    for (b in spots) {
+                        n++
+                        result.add(Tree(sx * a, sz * b, 0.9f + 0.1f * (n % 5), if (n % 2 == 0) 1 else 0, n % 2))
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun generateCity() {
+        val base = buildCityRoads()
+        roads = base
+        // Nothing ordinary goes in the park in the middle or in the block that holds the player's house.
+        reserved = listOf(
+            floatArrayOf(-145f, -145f, 145f, 145f),
+            floatArrayOf(HOME_BLOCK_X0, HOME_BLOCK_Z0, HOME_BLOCK_X1, HOME_BLOCK_Z1)
+        )
+        val list = ArrayList<House>(buildCityHouses())
+        addHome(list)
+        val parkTrees = plazaFeatures(list)
+        houses = list
+        trees = buildTrees() + homeTrees() + parkTrees
+        lamps = buildLamps()
+        walkways = buildWalkways()
+        potholes = emptyList()
+        // The driveway is added last so it gets no pavements and no street lights of its own.
+        roads = base + Road(false, HOME_CAR_Z, 3f, HOME_BLOCK_X0, 497f, SURFACE_SMOOTH)
+    }
+
+    // ---------------------------------------------------------------- Neribo Desert
+
+    private fun buildDesertRoads(): List<Road> {
+        val list = ArrayList<Road>()
+        // The old highway north-south, and the road across it: worn, with a few holes.
+        list.add(Road(true, 0f, 6f, ROAD_Z_MIN, ROAD_Z_MAX, SURFACE_WORN))
+        list.add(Road(false, 0f, 6f, ROAD_X_MIN, ROAD_X_MAX, SURFACE_WORN))
+        // A square dirt track to race round.
+        for (x in floatArrayOf(-420f, 420f)) list.add(Road(true, x, 4f, -420f, 420f, SURFACE_DIRT))
+        for (z in floatArrayOf(-420f, 420f)) list.add(Road(false, z, 4f, -420f, 420f, SURFACE_DIRT))
+        // Two rough tarmac side roads.
+        list.add(Road(false, 220f, 5f, 0f, ROAD_X_MAX, SURFACE_POTHOLED))
+        list.add(Road(true, -220f, 5f, ROAD_Z_MIN, 0f, SURFACE_POTHOLED))
+        return list
+    }
+
+    private fun desertPlan(rnd: Random): Plan {
+        val roll = rnd.nextInt(100)
+        return when {
+            roll < 45 -> Plan(TYPE_BUNGALOW, 5f + rnd.nextFloat() * 2f, 4.5f + rnd.nextFloat(), 3.6f)
+            roll < 75 -> Plan(TYPE_HOUSE, 5.5f + rnd.nextFloat() * 1.5f, 5f + rnd.nextFloat(), 6.2f)
+            roll < 95 -> Plan(TYPE_SHOP, 4.5f + rnd.nextFloat() * 1.5f, 4f + rnd.nextFloat(), 4f)
+            else -> Plan(TYPE_TOWER, 3.2f, 3.2f, 13f)   // a water tower
+        }
+    }
+
+    /** A small desert town where the two highways cross. */
+    private fun buildDesertHouses(): List<House> {
+        val rnd = Random(57)
+        val list = ArrayList<House>()
+        for (road in roads) {
+            if (road.surface != SURFACE_WORN) continue
+            for (side in intArrayOf(-1, 1)) {
+                var t = -170f
+                while (t < 170f) {
+                    val plan = desertPlan(rnd)
+                    val setback = 7f + rnd.nextFloat() * 7f
+                    val placeAt = t
+                    t += plan.halfWidth * 2f + 10f + rnd.nextFloat() * 18f
+                    if (rnd.nextInt(100) < 25) continue
+                    val house = roadsideHouse(rnd, road, side, placeAt, plan, setback, Districts.DESERT) ?: continue
+                    list.add(house)
+                }
+            }
+        }
+        return list
+    }
+
+    /** Cacti, rocks and dry bushes scattered over the sand, away from roads and houses. */
+    private fun buildDesertScenery(): List<Tree> {
+        val rnd = Random(64)
+        val list = ArrayList<Tree>()
+        var cacti = 0
+        var rocks = 0
+        var bushes = 0
+        var attempts = 0
+        while ((cacti < 240 || rocks < 140 || bushes < 160) && attempts < 20000) {
+            attempts++
+            val x = MIN_X + 20f + rnd.nextFloat() * (BEACH_X0 - 10f - MIN_X - 20f)
+            val z = MIN_Z + 20f + rnd.nextFloat() * (MAX_Z - MIN_Z - 40f)
+            if (treeBlocked(x, z, 4f)) continue
+            when (rnd.nextInt(3)) {
+                0 -> if (cacti < 240) {
+                    list.add(Tree(x, z, 0.9f + rnd.nextFloat() * 0.8f, 2, 0))
+                    cacti++
+                }
+                1 -> if (rocks < 140) {
+                    list.add(Tree(x, z, 0.8f + rnd.nextFloat() * 1.8f, 4, 0))
+                    rocks++
+                }
+                else -> if (bushes < 160) {
+                    list.add(Tree(x, z, 0.6f + rnd.nextFloat() * 0.5f, 3, 0))
+                    bushes++
+                }
+            }
+        }
+        return list
+    }
+
+    private fun generateDesert() {
+        roads = buildDesertRoads()
+        houses = buildDesertHouses()
+        trees = buildDesertScenery()
+        lamps = emptyList()
+        walkways = emptyList()
+        potholes = buildPotholes(0.35f)
     }
 
     // ---------------------------------------------------------------- chunks

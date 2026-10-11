@@ -27,6 +27,10 @@ class TouchControls {
     var mapTapped = false
         private set
 
+    /** True for one frame when the GO (travel to the next world) button is first pressed. */
+    var travelTapped = false
+        private set
+
     /** True for one frame when the EXIT / ENTER button is first pressed. */
     var actionTapped = false
         private set
@@ -94,18 +98,21 @@ class TouchControls {
     private val brakeButton = Button("BRAKE")
     private val mapButton = Button("MAP")
     private val cameraButton = Button("CAM")
+    private val travelButton = Button("GO")
     private val zoomInButton = Button("+")
     private val zoomOutButton = Button("-")
     private val actionButton = Button("EXIT")
     private val allButtons = listOf(
         leftButton, rightButton, gasButton, brakeButton, mapButton, cameraButton, zoomInButton, zoomOutButton,
-        actionButton
+        actionButton, travelButton
     )
 
     private val mapOnly = listOf(mapButton)
 
     // Walking shows only these: JUMP (in the gas button's place), the right-hand column and ENTER.
-    private val footButtons = listOf(gasButton, mapButton, cameraButton, zoomInButton, zoomOutButton, actionButton)
+    private val footButtons = listOf(
+        gasButton, mapButton, cameraButton, zoomInButton, zoomOutButton, actionButton, travelButton
+    )
     private val active: List<Button>
         get() = if (mapMode) mapOnly else if (onFoot) footButtons else allButtons
 
@@ -130,6 +137,7 @@ class TouchControls {
     private var lastTapY = 0f
 
     private var cameraWasDown = false
+    private var travelWasDown = false
     private var mapWasDown = false
     private var actionWasDown = false
     private var lastPinchDistance = 0f
@@ -160,6 +168,7 @@ class TouchControls {
         mapButton.place(columnX, h * 0.80f, smallR)
         actionButton.place(columnX - smallR * 2.5f, h * 0.80f, smallR)
         cameraButton.place(columnX, h * 0.65f, smallR)
+        travelButton.place(columnX - smallR * 2.5f, h * 0.65f, smallR)
         zoomInButton.place(columnX, h * 0.505f, tinyR)
         zoomOutButton.place(columnX, h * 0.385f, tinyR)
     }
@@ -295,6 +304,8 @@ class TouchControls {
 
         cameraTapped = cameraButton.pressed && !cameraWasDown
         mapTapped = mapButton.pressed && !mapWasDown
+        travelTapped = travelButton.pressed && !travelWasDown
+        travelWasDown = travelButton.pressed
         actionTapped = actionButton.pressed && !actionWasDown
         actionWasDown = actionButton.pressed
         cameraWasDown = cameraButton.pressed
@@ -362,6 +373,7 @@ class TouchControls {
         font.data.setScale(textScale * 1.1f)
         label(batch, font, layout, mapButton)
         label(batch, font, layout, cameraButton)
+        label(batch, font, layout, travelButton)
         font.data.setScale(textScale * 0.95f)
         label(batch, font, layout, actionButton)
         font.data.setScale(textScale * 1.6f)

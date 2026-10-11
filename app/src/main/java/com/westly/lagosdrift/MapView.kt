@@ -246,8 +246,18 @@ class MapView {
         if (alpha > 0.02f) {
             font.data.setScale(textScale * 1.7f)
             font.setColor(1f, 1f, 1f, alpha)
-            drawCentred(batch, font, layout, Districts.NAMES[Districts.IKOYI], screenX(-50f), screenY(400f))
-            drawCentred(batch, font, layout, Districts.NAMES[Districts.IKORODU], screenX(-50f), screenY(-400f))
+            when (TownLayout.world) {
+                Districts.WORLD_CITY -> {
+                    drawCentred(batch, font, layout, Districts.WORLD_NAMES[Districts.WORLD_CITY], screenX(0f), screenY(-60f))
+                    drawCentred(batch, font, layout, "HOME", screenX(TownLayout.HOME_X), screenY(TownLayout.HOME_Z - 30f))
+                }
+                Districts.WORLD_DESERT ->
+                    drawCentred(batch, font, layout, Districts.WORLD_NAMES[Districts.WORLD_DESERT], screenX(0f), screenY(-60f))
+                else -> {
+                    drawCentred(batch, font, layout, Districts.NAMES[Districts.IKOYI], screenX(-50f), screenY(400f))
+                    drawCentred(batch, font, layout, Districts.NAMES[Districts.IKORODU], screenX(-50f), screenY(-400f))
+                }
+            }
         }
 
         font.data.setScale(textScale)
@@ -276,6 +286,14 @@ class MapView {
         const val MAX_SCALE = 6f
         private const val TAP_MOVE = 24f
         private const val TAP_TIME = 0.4f
-        val LEGEND = arrayOf("PLAYER POSITION", "IKOYI (CITY)", "IKORODU (TOWN)", "SMOOTH ROAD", "ROUGH ROAD / POTHOLES")
+        private val LEGEND_LAGOS = arrayOf("PLAYER POSITION", "IKOYI (CITY)", "IKORODU (TOWN)", "SMOOTH ROAD", "ROUGH ROAD / POTHOLES")
+        private val LEGEND_CITY = arrayOf("PLAYER POSITION", "NERIBO CITY", "HOMES AND SHOPS", "SMOOTH ROAD", "ROUGH ROAD / POTHOLES")
+        private val LEGEND_DESERT = arrayOf("PLAYER POSITION", "TOWN", "HOUSES", "OLD HIGHWAY", "DIRT TRACK")
+        val LEGEND: Array<String>
+            get() = when (TownLayout.world) {
+                Districts.WORLD_CITY -> LEGEND_CITY
+                Districts.WORLD_DESERT -> LEGEND_DESERT
+                else -> LEGEND_LAGOS
+            }
     }
 }

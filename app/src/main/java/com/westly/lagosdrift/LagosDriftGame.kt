@@ -15,6 +15,7 @@ import com.badlogic.gdx.graphics.g3d.ModelInstance
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
+import com.badlogic.gdx.math.Quaternion
 import com.badlogic.gdx.math.Vector3
 
 /**
@@ -22,6 +23,10 @@ import com.badlogic.gdx.math.Vector3
  * character, or drive your own danfo in Ikorodu: stop at the bus stops, take passengers, drop them
  * at their stop and earn fares. Other cars and danfos share the road.
  * The world is built in 100 m chunks around whoever the camera follows (a vehicle, or the walker).
+ *
+ * Phase 7: the player's car is a 2006 Toyota Camry (steering and rolling wheels), and the GO button
+ * travels between three worlds: Lagos, Neribo City (with the player's house and its garage) and
+ * Neribo Desert. The two new worlds have their own sky, taken from a 360 degree HDRI picture.
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -44,6 +49,32 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var spriteBatch: SpriteBatch
     private lateinit var shapeRenderer: ShapeRenderer
     private lateinit var font: BitmapFont
+
+    private val sun = DirectionalLight()
+    private val skies = arrayOfNulls<SkyDome>(Districts.WORLD_COUNT)
+    private val crowds = arrayOfNulls<PedestrianCrowd>(Districts.WORLD_COUNT)
+    private var sky: SkyDome? = null
+    private var world = Districts.WORLD_LAGOS
+    private var usingCamry = false
+    private var clearR = 0.53f
+    private var clearG = 0.81f
+    private var clearB = 0.92f
+    private val wheelSteer = Quaternion()
+    private val wheelRoll = Quaternion()
+
+    /** Where the player's car, the player and the on-foot flag were in each world when it was left. */
+    private class WorldState {
+        var has = false
+        var gx = 0f
+        var gz = 0f
+        var gyaw = 0f
+        var px = 0f
+        var pz = 0f
+        var pyaw = 0f
+        var onFoot = false
+    }
+    private val states = Array(Districts.WORLD_COUNT) { WorldState() }
+    private var danfoDriven = false
 
     private val glyphLayout = GlyphLayout()
     private val grind = CarController()
@@ -108,12 +139,20 @@ class LagosDriftGame : ApplicationAdapter() {
         environment = Environment()
         environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.60f, 1f))
         environment.set(ColorAttribute(ColorAttribute.Fog, SKY_R, SKY_G, SKY_B, 1f))
-        environment.add(DirectionalLight().set(0.90f, 0.88f, 0.80f, -0.6f, -1f, -0.4f))
+        sun.set(0.90f, 0.88f, 0.80f, -0.6f, -1f, -0.4f)
+        environment.add(sun)
         environment.add(DirectionalLight().set(0.25f, 0.25f, 0.30f, 0.6f, -0.3f, 0.5f))
 
         modelBatch = ModelBatch()
         groundModel = GroundModelFactory.build()
-        carModel = CarModelFactory.build(withDoor = true)
+        // The player's car is the Camry. If its files cannot be read, the old box-built car is used instead.
+        carModel = try {
+            usingCamry = true
+            CamryModelFactory.load()
+        } catch (e: Exception) {
+            usingCamry = false
+            CarModelFactory.build(withDoor = true)
+        }
         // One human model is shared by the player, the people on the pavements and the bus-stop crowds.
         playerModel = PlayerModelFactory.load()
         groundInstance = ModelInstance(groundModel)
@@ -126,13 +165,14 @@ class LagosDriftGame : ApplicationAdapter() {
         // Your danfo waits in Ikorodu, 40 m north of the border road, facing north.
         danfo.place(3f, -40f, 0f)
         crowd = PedestrianCrowd(playerModel)
+        crowds[Districts.WORLD_LAGOS] = crowd
         playerInstance = ModelInstance(playerModel)
         traffic.create()
 
         // Carry on where the last game stopped, if there is one.
         val resumed = restoreGame()
         focus.set(if (onFoot) player.position else controller.position)
-        traffic.populate(focus, vehiclePositions)
+        if (world == Districts.WORLD_LAGOS) traffic.populate(focus, vehiclePositions)
         if (resumed) {
             showHint("Welcome back - carrying on where you stopped", 5f)
         } else {
@@ -141,6 +181,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         chunks = ChunkManager()
         chunks.preload(focus.x, focus.z)
+        if (world != Districts.WORLD_LAGOS) applyWorldLook()
 
         spriteBatch = SpriteBatch()
         shapeRenderer = ShapeRenderer()
@@ -201,6 +242,8 @@ class LagosDriftGame : ApplicationAdapter() {
                 controls.mapMode = false
             }
         }
+
+        if (controls.travelTapped && !mapOpen) travel()
 
         if (controls.cameraTapped) {
             viewMode = (viewMode + 1) % ChaseCamera.MODE_COUNT
@@ -267,7 +310,7 @@ class LagosDriftGame : ApplicationAdapter() {
         // The game pauses while the big map is open.
         if (!mapOpen) {
             // The vehicle you drive gets your controls; the other one just rolls to a stop.
-            for (v in arrayOf(grind, danfo)) {
+            for (v in activeVehicles()) {
                 if (!onFoot && v === controller && doorSequence == 0) {
                     v.update(delta, controls.steer, controls.throttle, controls.brake)
                 } else if (v === seqVehicle && doorSequence != 0) {
@@ -276,21 +319,21 @@ class LagosDriftGame : ApplicationAdapter() {
                     v.update(delta, 0f, false, false)
                 }
                 TownCollision.resolve(v, radiusOf(v), offsetOf(v))
-                traffic.collide(v, offsetOf(v), radiusOf(v))
+                if (world == Districts.WORLD_LAGOS) traffic.collide(v, offsetOf(v), radiusOf(v))
             }
             if (onFoot && doorSequence != 0) {
                 runDoorSequence(delta)
             } else if (onFoot) {
                 walkOnFoot(delta)
                 TownCollision.resolvePoint(player.position, PLAYER_RADIUS)
-                for (v in arrayOf(grind, danfo)) {
+                for (v in activeVehicles()) {
                     TownCollision.pushOutOfCar(
                         player.position, PLAYER_RADIUS, v.position, v.yawDegrees, radiusOf(v), offsetOf(v)
                     )
                 }
-                traffic.pushOut(player.position, PLAYER_RADIUS)
+                if (world == Districts.WORLD_LAGOS) traffic.pushOut(player.position, PLAYER_RADIUS)
             }
-            job.update(delta, if (!onFoot && controller === danfo) danfo else null)
+            if (world == Districts.WORLD_LAGOS) job.update(delta, if (!onFoot && controller === danfo) danfo else null)
 
             // The driver's doors swing open and shut.
             val doorStep = delta / DOOR_TIME
@@ -312,7 +355,7 @@ class LagosDriftGame : ApplicationAdapter() {
         }
 
         if (!mapOpen) {
-            traffic.update(delta, focus, vehiclePositions, onFoot, player.position)
+            if (world == Districts.WORLD_LAGOS) traffic.update(delta, focus, vehiclePositions, onFoot, player.position)
             crowd.update(delta, focus)
         }
         chunks.update(focus.x, focus.z)
@@ -322,6 +365,7 @@ class LagosDriftGame : ApplicationAdapter() {
         danfoInstance.transform.setToRotation(Vector3.Y, danfo.yawDegrees)
             .setTranslation(danfo.position.x, danfo.position.y + danfo.bounceHeight, danfo.position.z)
         carInstance.getNode(CarModelFactory.DOOR_NODE)?.rotation?.set(Vector3.Y, -DOOR_ANGLE * doorAmount[0])
+        if (usingCamry) updateWheels()
         carInstance.calculateTransforms()
         danfoDoorInstance.transform.set(danfoInstance.transform)
         danfoDoorInstance.getNode(TrafficModelFactory.DANFO_DOOR_NODE)?.rotation
@@ -335,18 +379,29 @@ class LagosDriftGame : ApplicationAdapter() {
         chaseCamera.update(focus, focusYaw, followSpeed, delta, viewMode)
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
-        Gdx.gl.glClearColor(SKY_R, SKY_G, SKY_B, 1f)
+        Gdx.gl.glClearColor(clearR, clearG, clearB, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+
+        val skyNow = sky
+        if (skyNow != null) {
+            modelBatch.begin(camera)
+            skyNow.render(modelBatch, camera)
+            modelBatch.end()
+        }
 
         modelBatch.begin(camera)
         modelBatch.render(groundInstance, environment)
         chunks.render(modelBatch, environment, camera)
         crowd.render(modelBatch, environment, focus)
-        traffic.render(modelBatch, environment, camera, focus)
-        job.render(modelBatch, environment, camera, focus)
+        if (world == Districts.WORLD_LAGOS) {
+            traffic.render(modelBatch, environment, camera, focus)
+            job.render(modelBatch, environment, camera, focus)
+        }
         modelBatch.render(carInstance, environment)
-        modelBatch.render(danfoInstance, environment)
-        modelBatch.render(danfoDoorInstance, environment)
+        if (world == Districts.WORLD_LAGOS) {
+            modelBatch.render(danfoInstance, environment)
+            modelBatch.render(danfoDoorInstance, environment)
+        }
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
 
@@ -355,11 +410,11 @@ class LagosDriftGame : ApplicationAdapter() {
 
         parkedMarkers.clear()
         if (onFoot || controller !== grind) parkedMarkers.add(grind.position)
-        if (onFoot || controller !== danfo) parkedMarkers.add(danfo.position)
+        if (world == Districts.WORLD_LAGOS && (onFoot || controller !== danfo)) parkedMarkers.add(danfo.position)
         val parked: List<Vector3> = parkedMarkers
         if (mapOpen) {
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked, job.mapStops)
+            mapRenderer.drawFull(shapeRenderer, mapView, focus, focusYaw, parked, stopsForMap())
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
         } else {
@@ -367,7 +422,7 @@ class LagosDriftGame : ApplicationAdapter() {
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked, job.mapStops)
+            mapRenderer.drawMini(shapeRenderer, focus, focusYaw, miniX, miniY, miniSize, parked, stopsForMap())
             shapeRenderer.end()
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
 
@@ -397,6 +452,20 @@ class LagosDriftGame : ApplicationAdapter() {
             glyphLayout.setText(font, copyrightText)
             font.draw(spriteBatch, glyphLayout, screenWidth - safeRight - margin - glyphLayout.width, screenHeight - margin)
 
+            // The Camry's licence asks for its author to be named.
+            if (usingCamry) {
+                font.data.setScale(textScale * 0.7f)
+                font.setColor(1f, 1f, 1f, 0.6f)
+                glyphLayout.setText(font, CamryModelFactory.CREDIT)
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth - safeRight - margin - glyphLayout.width,
+                    screenHeight - margin - glyphLayout.height * 2.6f
+                )
+                font.data.setScale(textScale)
+                font.setColor(1f, 1f, 1f, 0.8f)
+            }
+
             // Where you are and what the road is like.
             glyphLayout.setText(font, placeText())
             font.draw(
@@ -406,7 +475,7 @@ class LagosDriftGame : ApplicationAdapter() {
             )
 
             // Danfo work: passengers, money, where to go next.
-            if ((!onFoot && controller === danfo) || job.passengerCount > 0) {
+            if (world == Districts.WORLD_LAGOS && ((!onFoot && controller === danfo) || job.passengerCount > 0)) {
                 val line = "Passengers ${job.passengerCount}/${DanfoJob.CAPACITY}     N${job.money}"
                 glyphLayout.setText(font, line)
                 font.draw(
@@ -424,7 +493,7 @@ class LagosDriftGame : ApplicationAdapter() {
                     )
                 }
             }
-            if (job.messageTimer > 0f) {
+            if (world == Districts.WORLD_LAGOS && job.messageTimer > 0f) {
                 font.data.setScale(textScale * 1.5f)
                 glyphLayout.setText(font, job.message)
                 font.draw(
@@ -555,7 +624,7 @@ class LagosDriftGame : ApplicationAdapter() {
     private fun nearestVehicleInReach(): CarController? {
         var best: CarController? = null
         var bestD = Float.MAX_VALUE
-        for (v in arrayOf(grind, danfo)) {
+        for (v in activeVehicles()) {
             val dx = player.position.x - v.position.x
             val dz = player.position.z - v.position.z
             val d2 = dx * dx + dz * dz
@@ -581,7 +650,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
     /** For example "IKORODU - broken road". */
     private fun placeText(): String {
-        val district = Districts.NAMES[Districts.at(focus.z)]
+        val district = Districts.nameAt(focus.z)
         val surface = if (onFoot) RoadSurface.surfaceAt(focus.x, focus.z) else controller.surface
         val road = when (surface) {
             TownLayout.SURFACE_SMOOTH -> "smooth road"
@@ -598,13 +667,38 @@ class LagosDriftGame : ApplicationAdapter() {
         saveGame()
     }
 
-    /**
-     * Writes everything needed to carry on later: where the vehicles and the player are, whether
-     * you are walking or driving (and which vehicle), the camera, and the danfo work.
-     * A door sequence that is half done is saved as if it had finished.
-     */
-    private fun saveGame() {
-        if (!::job.isInitialized || !::chaseCamera.isInitialized) return
+    /** The vehicles that exist in the current world: both in Lagos, only the Camry elsewhere. */
+    private fun activeVehicles(): Array<CarController> =
+        if (world == Districts.WORLD_LAGOS) arrayOf(grind, danfo) else arrayOf(grind)
+
+    private fun stopsForMap(): List<MapStop>? = if (world == Districts.WORLD_LAGOS) job.mapStops else null
+
+    /** Front wheels steer with the steering, all four wheels roll with the speed. */
+    private fun updateWheels() {
+        val roll = -grind.wheelRollDegrees
+        val steer = -grind.steerAmount * MAX_WHEEL_STEER
+        wheelRoll.set(Vector3.X, roll)
+        carInstance.getNode(CamryModelFactory.WHEEL_RL)?.rotation?.set(wheelRoll)
+        carInstance.getNode(CamryModelFactory.WHEEL_RR)?.rotation?.set(wheelRoll)
+        wheelSteer.set(Vector3.Y, steer).mul(wheelRoll)
+        carInstance.getNode(CamryModelFactory.WHEEL_FL)?.rotation?.set(wheelSteer)
+        carInstance.getNode(CamryModelFactory.WHEEL_FR)?.rotation?.set(wheelSteer)
+    }
+
+    // ------------------------------------------------------------------ worlds
+
+    /** The GO button: carry on to the next world (Lagos, then Neribo City, then Neribo Desert, then Lagos again). */
+    private fun travel() {
+        if (doorSequence != 0) return
+        if (world == Districts.WORLD_LAGOS && job.passengerCount > 0) {
+            showHint("Drop your passengers first")
+            return
+        }
+        switchWorld((world + 1) % Districts.WORLD_COUNT)
+    }
+
+    /** Remembers where the car and the player are in the current world. */
+    private fun captureState() {
         var savedOnFoot = onFoot
         var savedVehicle = controller
         var px = player.position.x
@@ -616,19 +710,143 @@ class LagosDriftGame : ApplicationAdapter() {
             savedOnFoot = false
             savedVehicle = seqVehicle ?: controller
         }
+        val st = states[world]
+        st.has = true
+        st.gx = grind.position.x
+        st.gz = grind.position.z
+        st.gyaw = grind.yawDegrees
+        st.px = px
+        st.pz = pz
+        st.pyaw = player.yawDegrees
+        st.onFoot = savedOnFoot
+        if (world == Districts.WORLD_LAGOS) danfoDriven = savedVehicle === danfo
+    }
+
+    /** Puts the car and the player where they were in world [w], or at its start if it was never visited. */
+    private fun loadState(w: Int) {
+        val st = states[w]
+        if (st.has) {
+            grind.place(st.gx, st.gz, st.gyaw)
+        } else if (w == Districts.WORLD_CITY) {
+            grind.place(TownLayout.HOME_CAR_X, TownLayout.HOME_CAR_Z, TownLayout.HOME_CAR_YAW)
+        } else if (w == Districts.WORLD_DESERT) {
+            grind.place(TownLayout.DESERT_CAR_X, TownLayout.DESERT_CAR_Z, TownLayout.DESERT_CAR_YAW)
+        }
+        onFoot = st.has && st.onFoot
+        controller = if (w == Districts.WORLD_LAGOS && danfoDriven) danfo else grind
+        doorSequence = 0
+        for (i in 0..1) {
+            doorAmount[i] = 0f
+            doorTarget[i] = 0f
+            doorHold[i] = 0f
+        }
+        hasWalkTarget = false
+        if (onFoot) {
+            player.place(st.px, st.pz, st.pyaw)
+            chaseCamera.freeLook = true
+            controls.setOnFoot(true)
+        } else {
+            chaseCamera.freeLook = false
+            controls.setOnFoot(false)
+            applyVehicleCamera()
+        }
+        chaseCamera.distanceScale =
+            if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
+    }
+
+    private fun switchWorld(target: Int) {
+        captureState()
+        world = target
+        TownLayout.select(target)
+        loadState(target)
+        focus.set(if (onFoot) player.position else controller.position)
+        applyWorldLook()
+        chunks.dispose()
+        chunks = ChunkManager()
+        chunks.preload(focus.x, focus.z)
+        if (target == Districts.WORLD_LAGOS) traffic.populate(focus, vehiclePositions)
+        when (target) {
+            Districts.WORLD_CITY -> showHint("Neribo City - your house is at the end of the driveway", 6f)
+            Districts.WORLD_DESERT -> showHint("Neribo Desert - the old highway runs north and south", 6f)
+            else -> showHint("Lagos - back where you left off", 4f)
+        }
+        saveGame()
+    }
+
+    /** Ground, sky, haze, sunlight and people for the current world. */
+    private fun applyWorldLook() {
+        groundModel.dispose()
+        groundModel = GroundModelFactory.build(world)
+        groundInstance = ModelInstance(groundModel)
+
+        var fogR = SKY_R
+        var fogG = SKY_G
+        var fogB = SKY_B
+        when (world) {
+            Districts.WORLD_CITY -> {
+                // Colours and sun direction come from the ostrich_road HDRI.
+                fogR = 0.59f; fogG = 0.61f; fogB = 0.65f
+                environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.58f, 0.58f, 0.62f, 1f))
+                sun.set(0.95f, 0.93f, 0.86f, -0.08f, -0.71f, -0.70f)
+                sky = skies[world] ?: SkyDome("sky/sky_city.jpg").also { skies[world] = it }
+            }
+            Districts.WORLD_DESERT -> {
+                // Colours and sun direction come from the aarfontein_pan HDRI.
+                fogR = 0.83f; fogG = 0.87f; fogB = 0.885f
+                environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.62f, 0.58f, 0.52f, 1f))
+                sun.set(1.0f, 0.92f, 0.78f, 0.42f, -0.71f, -0.57f)
+                sky = skies[world] ?: SkyDome("sky/sky_desert.jpg").also { skies[world] = it }
+            }
+            else -> {
+                environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.60f, 1f))
+                sun.set(0.90f, 0.88f, 0.80f, -0.6f, -1f, -0.4f)
+                sky = null
+            }
+        }
+        clearR = fogR
+        clearG = fogG
+        clearB = fogB
+        environment.set(ColorAttribute(ColorAttribute.Fog, fogR, fogG, fogB, 1f))
+
+        crowd = crowds[world] ?: PedestrianCrowd(playerModel).also { crowds[world] = it }
+    }
+
+    /**
+     * Writes everything needed to carry on later: where the vehicles and the player are in every world
+     * you have visited, which world you are in, whether you are walking or driving (and which vehicle),
+     * the camera, and the danfo work. A door sequence that is half done is saved as if it had finished.
+     * Lagos keeps the original save keys, so older saves still load.
+     */
+    private fun saveGame() {
+        if (!::job.isInitialized || !::chaseCamera.isInitialized) return
+        captureState()
         val p = Gdx.app.getPreferences(SAVE_NAME)
         p.putInteger("version", SAVE_VERSION)
-        p.putFloat("grind_x", grind.position.x)
-        p.putFloat("grind_z", grind.position.z)
-        p.putFloat("grind_yaw", grind.yawDegrees)
+        p.putInteger("world", world)
+        val lagos = states[Districts.WORLD_LAGOS]
+        p.putFloat("grind_x", lagos.gx)
+        p.putFloat("grind_z", lagos.gz)
+        p.putFloat("grind_yaw", lagos.gyaw)
         p.putFloat("danfo_x", danfo.position.x)
         p.putFloat("danfo_z", danfo.position.z)
         p.putFloat("danfo_yaw", danfo.yawDegrees)
-        p.putFloat("player_x", px)
-        p.putFloat("player_z", pz)
-        p.putFloat("player_yaw", player.yawDegrees)
-        p.putBoolean("on_foot", savedOnFoot)
-        p.putBoolean("drive_danfo", savedVehicle === danfo)
+        p.putFloat("player_x", lagos.px)
+        p.putFloat("player_z", lagos.pz)
+        p.putFloat("player_yaw", lagos.pyaw)
+        p.putBoolean("on_foot", lagos.onFoot)
+        p.putBoolean("drive_danfo", danfoDriven)
+        for (w in 1 until Districts.WORLD_COUNT) {
+            val st = states[w]
+            p.putBoolean("w${w}_has", st.has)
+            if (!st.has) continue
+            p.putFloat("w${w}_gx", st.gx)
+            p.putFloat("w${w}_gz", st.gz)
+            p.putFloat("w${w}_gyaw", st.gyaw)
+            p.putFloat("w${w}_px", st.px)
+            p.putFloat("w${w}_pz", st.pz)
+            p.putFloat("w${w}_pyaw", st.pyaw)
+            p.putBoolean("w${w}_foot", st.onFoot)
+        }
         p.putInteger("view", viewMode)
         p.putFloat("zoom", chaseCamera.zoom)
         job.save(p)
@@ -646,24 +864,44 @@ class LagosDriftGame : ApplicationAdapter() {
         )
         for (v in values) if (v.isNaN() || v.isInfinite()) return false
 
-        grind.place(values[0], values[1], values[2])
+        val lagos = states[Districts.WORLD_LAGOS]
+        lagos.has = true
+        lagos.gx = values[0]
+        lagos.gz = values[1]
+        lagos.gyaw = values[2]
+        lagos.px = values[6]
+        lagos.pz = values[7]
+        lagos.pyaw = values[8]
+        lagos.onFoot = p.getBoolean("on_foot")
         danfo.place(values[3], values[4], values[5])
-        controller = if (p.getBoolean("drive_danfo")) danfo else grind
+        danfoDriven = p.getBoolean("drive_danfo")
+
+        for (w in 1 until Districts.WORLD_COUNT) {
+            if (!p.getBoolean("w${w}_has")) continue
+            val v = floatArrayOf(
+                p.getFloat("w${w}_gx"), p.getFloat("w${w}_gz"), p.getFloat("w${w}_gyaw"),
+                p.getFloat("w${w}_px"), p.getFloat("w${w}_pz"), p.getFloat("w${w}_pyaw")
+            )
+            if (v.any { it.isNaN() || it.isInfinite() }) continue
+            val st = states[w]
+            st.has = true
+            st.gx = v[0]
+            st.gz = v[1]
+            st.gyaw = v[2]
+            st.px = v[3]
+            st.pz = v[4]
+            st.pyaw = v[5]
+            st.onFoot = p.getBoolean("w${w}_foot")
+        }
+
         viewMode = p.getInteger("view", viewMode).coerceIn(0, ChaseCamera.MODE_COUNT - 1)
         chaseCamera.zoom = p.getFloat("zoom", 1f).coerceIn(0.5f, 2.5f)
-        onFoot = p.getBoolean("on_foot")
-        if (onFoot) {
-            player.place(values[6], values[7], values[8])
-            chaseCamera.freeLook = true
-            controls.setOnFoot(true)
-        } else {
-            chaseCamera.freeLook = false
-            controls.setOnFoot(false)
-            applyVehicleCamera()
-        }
-        chaseCamera.distanceScale =
-            if (onFoot) ON_FOOT_CAMERA_SCALE else if (controller === danfo) DANFO_CAMERA_SCALE else 1f
         job.load(p)
+
+        // The job above is built from the Lagos roads, so the saved world is only selected now.
+        world = p.getInteger("world", Districts.WORLD_LAGOS).coerceIn(0, Districts.WORLD_COUNT - 1)
+        TownLayout.select(world)
+        loadState(world)
         return true
     }
 
@@ -671,6 +909,7 @@ class LagosDriftGame : ApplicationAdapter() {
         saveGame()
         modelBatch.dispose()
         groundModel.dispose()
+        for (sk in skies) sk?.dispose()
         chunks.dispose()
         carModel.dispose()
         danfoModel.dispose()
@@ -707,6 +946,7 @@ class LagosDriftGame : ApplicationAdapter() {
         const val PLAYER_RADIUS = 0.4f
         const val WALK_TO_MAX = 80f
         const val ON_FOOT_CAMERA_SCALE = 0.42f
+        const val MAX_WHEEL_STEER = 28f   // degrees the front wheels turn at full steering
         const val SKY_R = 0.53f
         const val SKY_G = 0.81f
         const val SKY_B = 0.92f

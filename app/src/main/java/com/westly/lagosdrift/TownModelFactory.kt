@@ -29,6 +29,15 @@ object TownModelFactory {
     private val dashFresh = Color(0.95f, 0.95f, 0.90f, 1f)
     private val dashFaded = Color(0.74f, 0.73f, 0.67f, 1f)
     private val stallPost = Color(0.30f, 0.30f, 0.32f, 1f)
+    private val poolWater = Color(0.22f, 0.62f, 0.86f, 1f)
+    private val poolStone = Color(0.84f, 0.82f, 0.78f, 1f)
+    private val woodAccent = Color(0.52f, 0.34f, 0.20f, 1f)
+    private val garageDoor = Color(0.50f, 0.52f, 0.56f, 1f)
+    private val garageLine = Color(0.66f, 0.68f, 0.71f, 1f)
+    private val cactusGreen = Color(0.24f, 0.52f, 0.28f, 1f)
+    private val rockDark = Color(0.55f, 0.46f, 0.38f, 1f)
+    private val rockLight = Color(0.68f, 0.58f, 0.46f, 1f)
+    private val bushColor = Color(0.58f, 0.52f, 0.30f, 1f)
 
     /** Hands out parts, starting a fresh one every [every] items so no part gets too big. */
     private class PartSource(private val b: ModelBuilder, private val name: String, private val every: Int) {
@@ -71,7 +80,13 @@ object TownModelFactory {
         val buildings = PartSource(b, "buildings", 8)
         for (h in chunk.houses) {
             val part = buildings.next()
-            if (h.type == TownLayout.TYPE_STALL) addStall(part, h, detailed) else addBuilding(part, h, detailed)
+            when (h.type) {
+                TownLayout.TYPE_STALL -> addStall(part, h, detailed)
+                TownLayout.TYPE_VILLA -> addVilla(part, h, detailed)
+                TownLayout.TYPE_GARAGE -> addGarage(part, h, detailed)
+                TownLayout.TYPE_POOL -> addPool(part, h)
+                else -> addBuilding(part, h, detailed)
+            }
         }
 
         val trees = PartSource(b, "trees", 24)
@@ -111,7 +126,7 @@ object TownModelFactory {
 
     private fun addGround(b: ModelBuilder, chunk: TownLayout.Chunk) {
         val g = b.vertexPart("ground")
-        val land = if (chunk.district == Districts.IKOYI) TownPalette.IKOYI_GROUND else TownPalette.IKORODU_GROUND
+        val land = TownPalette.ground(chunk.district)
         val x0 = chunk.minX
         val x1 = chunk.minX + TownLayout.CHUNK
         val zc = chunk.minZ + TownLayout.CHUNK / 2f
@@ -122,7 +137,8 @@ object TownModelFactory {
             g.boxAt((from + to) / 2f, y, zc, to - from, 0.2f, TownLayout.CHUNK)
         }
 
-        if (x1 <= TownLayout.BEACH_X0) {
+        // The beach and the lagoon belong to Lagos only; the other worlds are land all the way across.
+        if (TownLayout.world != Districts.WORLD_LAGOS || x1 <= TownLayout.BEACH_X0) {
             slice(x0, x1, land, -0.1f)
         } else {
             slice(x0, min(x1, TownLayout.BEACH_X0), land, -0.1f)
@@ -215,7 +231,7 @@ object TownModelFactory {
     // ------------------------------------------------------------------ buildings
 
     private fun addBuilding(p: MeshPartBuilder, h: TownLayout.House, detailed: Boolean) {
-        val ikoyi = h.district == Districts.IKOYI
+        val ikoyi = Districts.isModern(h.district)
 
         // Walls (towers get a plant room on top).
         p.setColor(TownPalette.wall(h))
@@ -311,19 +327,100 @@ object TownModelFactory {
 
     private fun addTree(p: MeshPartBuilder, t: TownLayout.Tree, detailed: Boolean) {
         val s = t.scale
-        if (t.kind == 0) {
-            p.setColor(trunk)
-            p.cylinderAt(t.x, 1.1f * s, t.z, 0.5f * s, 2.2f * s, if (detailed) 8 else 5)
-            p.setColor(TownPalette.LEAVES[t.leafColor])
-            p.coneAt(t.x, 2.0f * s + 2.25f * s, t.z, 3.4f * s, 4.5f * s, if (detailed) 9 else 6)
-        } else {
-            p.setColor(palmTrunk)
-            p.cylinderAt(t.x, 2.75f * s, t.z, 0.38f * s, 5.5f * s, if (detailed) 8 else 5)
-            p.setColor(frond)
-            val leaves = if (detailed) 7 else 4
-            for (i in 0 until leaves) {
-                p.frondAt(t.x, 5.5f * s, t.z, i * (360f / leaves), 3.2f * s, 0.6f * s)
+        when (t.kind) {
+            0 -> {
+                p.setColor(trunk)
+                p.cylinderAt(t.x, 1.1f * s, t.z, 0.5f * s, 2.2f * s, if (detailed) 8 else 5)
+                p.setColor(TownPalette.LEAVES[t.leafColor])
+                p.coneAt(t.x, 2.0f * s + 2.25f * s, t.z, 3.4f * s, 4.5f * s, if (detailed) 9 else 6)
+            }
+            2 -> {
+                // Cactus: a tall trunk with two arms.
+                p.setColor(cactusGreen)
+                p.cylinderAt(t.x, 1.4f * s, t.z, 0.5f * s, 2.8f * s, if (detailed) 8 else 5)
+                if (detailed) {
+                    p.boxAt(t.x - 0.5f * s, 1.5f * s, t.z, 0.8f * s, 0.24f * s, 0.24f * s)
+                    p.boxAt(t.x - 0.85f * s, 2.0f * s, t.z, 0.24f * s, 1.0f * s, 0.24f * s)
+                    p.boxAt(t.x + 0.5f * s, 1.9f * s, t.z, 0.8f * s, 0.24f * s, 0.24f * s)
+                    p.boxAt(t.x + 0.85f * s, 2.35f * s, t.z, 0.24f * s, 0.9f * s, 0.24f * s)
+                }
+            }
+            3 -> {
+                p.setColor(bushColor)
+                p.coneAt(t.x, 0.35f * s, t.z, 1.0f * s, 0.7f * s, if (detailed) 7 else 5)
+            }
+            4 -> {
+                // Rock: two stacked blocks, as wide as the space it blocks.
+                p.setColor(rockDark)
+                p.cylinderAt(t.x, 0.45f * s, t.z, 1.1f * s, 0.9f * s, if (detailed) 7 else 5)
+                p.setColor(rockLight)
+                p.cylinderAt(t.x + 0.1f * s, 1.15f * s, t.z, 0.7f * s, 0.55f * s, if (detailed) 6 else 4)
+            }
+            else -> {
+                p.setColor(palmTrunk)
+                p.cylinderAt(t.x, 2.75f * s, t.z, 0.38f * s, 5.5f * s, if (detailed) 8 else 5)
+                p.setColor(frond)
+                val leaves = if (detailed) 7 else 4
+                for (i in 0 until leaves) {
+                    p.frondAt(t.x, 5.5f * s, t.z, i * (360f / leaves), 3.2f * s, 0.6f * s)
+                }
             }
         }
+    }
+
+    // ------------------------------------------------------------------ the player's house
+
+    /** The villa: two floors, a flat roof, a balcony over the front door and big windows. */
+    private fun addVilla(p: MeshPartBuilder, h: TownLayout.House, detailed: Boolean) {
+        p.setColor(TownPalette.wall(h))
+        p.boxAt(h.cx, h.height / 2f, h.cz, h.hw * 2f, h.height, h.hd * 2f)
+        p.setColor(TownPalette.roof(h))
+        p.boxAt(h.cx, h.height + 0.25f, h.cz, h.hw * 2f + 1.2f, 0.5f, h.hd * 2f + 1.2f)
+        if (!detailed) return
+        val half = lateralHalf(h)
+
+        // A warm wood band across the upper floor, and a long band of glass on it.
+        p.setColor(woodAccent)
+        p.facadeBoxAt(h, 0f, 5.6f, 0.03f, 0.1f, 2.4f, half * 1.9f)
+        p.setColor(glass)
+        p.facadeBoxAt(h, 0f, 5.6f, 0.06f, 0.1f, 1.8f, half * 1.7f)
+
+        // Balcony over the entrance with a glass rail and two pillars.
+        p.setColor(trim)
+        p.facadeBoxAt(h, 0f, 3.75f, 1.2f, 2.4f, 0.2f, half * 1.7f)
+        p.facadeBoxAt(h, -half * 0.85f, 1.9f, 2.2f, 0.3f, 3.8f, 0.3f)
+        p.facadeBoxAt(h, half * 0.85f, 1.9f, 2.2f, 0.3f, 3.8f, 0.3f)
+        p.setColor(glass)
+        p.facadeBoxAt(h, 0f, 4.35f, 2.3f, 0.08f, 1.0f, half * 1.7f)
+
+        // Ground floor: two big windows either side of a double door, with steps up to it.
+        p.facadeBoxAt(h, -half * 0.55f, 1.9f, 0.06f, 0.1f, 2.4f, half * 0.55f)
+        p.facadeBoxAt(h, half * 0.55f, 1.9f, 0.06f, 0.1f, 2.4f, half * 0.55f)
+        p.setColor(door)
+        p.facadeBoxAt(h, 0f, 1.25f, 0.06f, 0.14f, 2.5f, 2.2f)
+        p.setColor(poolStone)
+        p.facadeBoxAt(h, 0f, 0.1f, 1.0f, 2.0f, 0.2f, 4f)
+    }
+
+    /** The garage next to the villa: a flat roof and a wide roller door. */
+    private fun addGarage(p: MeshPartBuilder, h: TownLayout.House, detailed: Boolean) {
+        p.setColor(TownPalette.wall(h))
+        p.boxAt(h.cx, h.height / 2f, h.cz, h.hw * 2f, h.height, h.hd * 2f)
+        p.setColor(TownPalette.roof(h))
+        p.boxAt(h.cx, h.height + 0.2f, h.cz, h.hw * 2f + 0.8f, 0.4f, h.hd * 2f + 0.8f)
+        if (!detailed) return
+        val half = lateralHalf(h)
+        p.setColor(garageDoor)
+        p.facadeBoxAt(h, 0f, 1.5f, 0.03f, 0.12f, 3.0f, half * 1.6f)
+        p.setColor(garageLine)
+        for (i in 0 until 4) p.facadeBoxAt(h, 0f, 0.6f + 0.7f * i, 0.06f, 0.06f, 0.06f, half * 1.6f)
+    }
+
+    /** A swimming pool or a fountain: a stone rim with water inside, only just above the ground. */
+    private fun addPool(p: MeshPartBuilder, h: TownLayout.House) {
+        p.setColor(poolStone)
+        p.boxAt(h.cx, 0.2f, h.cz, h.hw * 2f, 0.4f, h.hd * 2f)
+        p.setColor(poolWater)
+        p.boxAt(h.cx, 0.42f, h.cz, h.hw * 2f - 1.2f, 0.05f, h.hd * 2f - 1.2f)
     }
 }

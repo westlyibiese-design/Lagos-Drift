@@ -42,6 +42,14 @@ class CarController(
         private set
 
     private var steerSmoothed = 0f
+
+    /** How far the steering is turned, -1 (left) to +1 (right). The front wheels follow it. */
+    val steerAmount: Float
+        get() = steerSmoothed
+
+    /** How far the wheels have rolled, in degrees. Grows when driving forward. */
+    var wheelRollDegrees = 0f
+        private set
     private val forward = Vector3()
     private var bounceAmp = 0f
     private var bounceTime = 0f
@@ -108,6 +116,7 @@ class CarController(
         // Move.
         forward.set(0f, 0f, -1f).rotate(Vector3.Y, yawDegrees)
         position.mulAdd(forward, speed * dt)
+        wheelRollDegrees = (wheelRollDegrees + speed * dt / WHEEL_RADIUS * 57.29578f) % 360f
 
         // Stop at the edge of the world.
         if (position.x < TownLayout.DRIVE_MIN_X || position.x > TownLayout.DRIVE_MAX_X ||
@@ -156,5 +165,6 @@ class CarController(
         const val COAST_DECEL = 5f
         const val WHEEL_OFFSET = 1.5f
         const val WHEEL_REACH = 0.35f
+        const val WHEEL_RADIUS = 0.33f
     }
 }

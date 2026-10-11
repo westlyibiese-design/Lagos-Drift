@@ -42,6 +42,40 @@ object TownPalette {
         Color(0.36f, 0.30f, 0.26f, 1f)   // brown
     )
 
+    // Neribo City: the first four are towers and offices, the other four are homes.
+    val CITY_WALLS = arrayOf(
+        Color(0.96f, 0.96f, 0.97f, 1f),  // white
+        Color(0.50f, 0.70f, 0.84f, 1f),  // glass blue
+        Color(0.34f, 0.52f, 0.58f, 1f),  // dark teal glass
+        Color(0.78f, 0.80f, 0.82f, 1f),  // light concrete
+        Color(0.93f, 0.88f, 0.78f, 1f),  // warm cream
+        Color(0.80f, 0.52f, 0.40f, 1f),  // terracotta
+        Color(0.66f, 0.76f, 0.62f, 1f),  // sage green
+        Color(0.94f, 0.84f, 0.58f, 1f)   // soft yellow
+    )
+    val CITY_ROOFS = arrayOf(
+        Color(0.22f, 0.24f, 0.28f, 1f),  // charcoal
+        Color(0.88f, 0.88f, 0.90f, 1f),  // white slab
+        Color(0.60f, 0.28f, 0.22f, 1f),  // clay tile
+        Color(0.38f, 0.40f, 0.44f, 1f)   // slate
+    )
+
+    // Neribo Desert: sun-baked adobe.
+    val DESERT_WALLS = arrayOf(
+        Color(0.86f, 0.74f, 0.55f, 1f),  // sand
+        Color(0.80f, 0.62f, 0.38f, 1f),  // ochre
+        Color(0.95f, 0.92f, 0.84f, 1f),  // whitewash
+        Color(0.76f, 0.45f, 0.30f, 1f),  // terracotta
+        Color(0.82f, 0.60f, 0.52f, 1f),  // dusty rose
+        Color(0.66f, 0.48f, 0.34f, 1f)   // adobe brown
+    )
+    val DESERT_ROOFS = arrayOf(
+        Color(0.72f, 0.58f, 0.40f, 1f),  // flat tan
+        Color(0.70f, 0.36f, 0.24f, 1f),  // terracotta
+        Color(0.60f, 0.62f, 0.64f, 1f),  // corrugated grey
+        Color(0.44f, 0.34f, 0.26f, 1f)   // brown
+    )
+
     val ACCENTS = arrayOf(
         Color(0.85f, 0.15f, 0.15f, 1f),  // red
         Color(0.15f, 0.60f, 0.30f, 1f),  // green
@@ -61,6 +95,9 @@ object TownPalette {
     // Ground and road surfaces.
     val IKOYI_GROUND = Color(0.28f, 0.58f, 0.27f, 1f)
     val IKORODU_GROUND = Color(0.52f, 0.50f, 0.30f, 1f)
+    val CITY_GROUND = Color(0.34f, 0.62f, 0.30f, 1f)
+    val DESERT_GROUND = Color(0.82f, 0.70f, 0.48f, 1f)
+    val DESERT_FAR_GROUND = Color(0.80f, 0.70f, 0.52f, 1f)
     val SAND = Color(0.90f, 0.82f, 0.55f, 1f)
     val WATER = Color(0.15f, 0.52f, 0.78f, 1f)
     val FAR_GROUND = Color(0.38f, 0.52f, 0.30f, 1f)
@@ -74,13 +111,27 @@ object TownPalette {
     val POTHOLE = Color(0.12f, 0.10f, 0.09f, 1f)
     val PUDDLE = Color(0.38f, 0.45f, 0.50f, 1f)
 
-    fun wall(h: TownLayout.House): Color =
-        if (h.district == Districts.IKOYI) IKOYI_WALLS[h.wallColor % IKOYI_WALLS.size]
-        else IKORODU_WALLS[h.wallColor % IKORODU_WALLS.size]
+    fun wall(h: TownLayout.House): Color = when (h.district) {
+        Districts.IKOYI -> IKOYI_WALLS[h.wallColor % IKOYI_WALLS.size]
+        Districts.CITY -> CITY_WALLS[h.wallColor % CITY_WALLS.size]
+        Districts.DESERT -> DESERT_WALLS[h.wallColor % DESERT_WALLS.size]
+        else -> IKORODU_WALLS[h.wallColor % IKORODU_WALLS.size]
+    }
 
-    fun roof(h: TownLayout.House): Color =
-        if (h.district == Districts.IKOYI) IKOYI_ROOFS[h.roofColor % IKOYI_ROOFS.size]
-        else IKORODU_ROOFS[h.roofColor % IKORODU_ROOFS.size]
+    fun roof(h: TownLayout.House): Color = when (h.district) {
+        Districts.IKOYI -> IKOYI_ROOFS[h.roofColor % IKOYI_ROOFS.size]
+        Districts.CITY -> CITY_ROOFS[h.roofColor % CITY_ROOFS.size]
+        Districts.DESERT -> DESERT_ROOFS[h.roofColor % DESERT_ROOFS.size]
+        else -> IKORODU_ROOFS[h.roofColor % IKORODU_ROOFS.size]
+    }
+
+    /** The colour of bare ground in a district. */
+    fun ground(district: Int): Color = when (district) {
+        Districts.IKOYI -> IKOYI_GROUND
+        Districts.CITY -> CITY_GROUND
+        Districts.DESERT -> DESERT_GROUND
+        else -> IKORODU_GROUND
+    }
 
     fun accent(index: Int): Color = ACCENTS[index % ACCENTS.size]
 
