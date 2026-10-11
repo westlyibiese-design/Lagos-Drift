@@ -28,8 +28,9 @@ import kotlin.math.sqrt
  * Lagos Drift: one world, the Glen Canyon road with the Futatsugoya tunnel. You drive a 2006 Toyota
  * Camry (steering and rolling wheels), or get out and walk.
  *
- * This is the clean-up step: the old towns, the Danfo job, the pedestrians and the old cars are gone.
- * The Camry stands at the spawn point in front of the sky until the new road is added.
+ * The old towns, the Danfo job, the pedestrians and the old cars are gone. The road is loaded and
+ * drawn by RoadWorld. The ground under the car comes later; until then the car is held at the height of
+ * the road at the spawn point (ROAD_SPAWN_Y).
  */
 class LagosDriftGame : ApplicationAdapter() {
     private lateinit var camera: PerspectiveCamera
@@ -37,6 +38,7 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var modelBatch: ModelBatch
     private lateinit var environment: Environment
     private lateinit var carModel: Model
+    private lateinit var roads: RoadWorld
     private lateinit var playerModel: Model
     private lateinit var playerInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
@@ -49,6 +51,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
     /** If the Camry cannot be loaded there is no other car: the exception text is shown and the game stops. */
     private var fatalError: String? = null
+    private var roadReady = false
 
     private val wheelSteer = Quaternion()
     private val wheelRoll = Quaternion()
@@ -133,7 +136,9 @@ class LagosDriftGame : ApplicationAdapter() {
         // Carry on where the last game stopped, if there is one; otherwise start at the spawn point.
         val resumed = restoreGame()
         if (!resumed) grind.place(SPAWN_X, SPAWN_Z, SPAWN_YAW)
+        grind.position.y = ROAD_SPAWN_Y
         focus.set(if (onFoot) player.position else grind.position)
+        roads = RoadWorld(SKY_R, SKY_G, SKY_B)
         if (resumed) showHint("Welcome back - carrying on where you stopped", 5f)
     }
 
@@ -170,6 +175,13 @@ class LagosDriftGame : ApplicationAdapter() {
             return
         }
         val delta = Gdx.graphics.deltaTime
+        if (!roadReady) {
+            // Loading: read the road around the start before the first frame of the game.
+            roads.update(delta, focus.x, focus.z, LOADING_BUDGET_MS)
+            if (roads.isReady(focus.x, focus.z)) roadReady = true
+            renderLoading()
+            return
+        }
         clock += delta
 
         // Keep the saved game fresh in case the phone kills the game without warning.
@@ -273,6 +285,8 @@ class LagosDriftGame : ApplicationAdapter() {
             focusYaw = grind.yawDegrees
         }
 
+        roads.update(delta, focus.x, focus.z, STREAM_BUDGET_MS)
+
         carInstance.transform.setToRotation(Vector3.Y, grind.yawDegrees)
             .setTranslation(grind.position.x, grind.position.y, grind.position.z)
         updateWheels()
@@ -296,6 +310,7 @@ class LagosDriftGame : ApplicationAdapter() {
         }
 
         modelBatch.begin(camera)
+        roads.render(modelBatch, camera)
         modelBatch.render(carInstance, environment)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
@@ -364,6 +379,17 @@ class LagosDriftGame : ApplicationAdapter() {
                 margin + glyphLayout.height * 3f
             )
 
+            // A road file that failed to load: the exact exception text, so it can be copied back.
+            val roadError = roads.errorText
+            if (roadError != null) {
+                font.setColor(1f, 0.5f, 0.5f, 1f)
+                font.draw(
+                    spriteBatch, roadError, screenWidth * 0.1f, screenHeight * 0.55f,
+                    screenWidth * 0.8f, Align.center, true
+                )
+                font.setColor(1f, 1f, 1f, 0.8f)
+            }
+
             if (hintTimer > 0f) {
                 glyphLayout.setText(font, hintText)
                 font.draw(
@@ -389,6 +415,31 @@ class LagosDriftGame : ApplicationAdapter() {
             screenWidth - safeRight - margin - glyphLayout.width,
             screenHeight - margin - glyphLayout.height * step
         )
+    }
+
+    /** The start-up screen while the road around the start is read. */
+    private fun renderLoading() {
+        Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
+        Gdx.gl.glClearColor(SKY_R, SKY_G, SKY_B, 1f)
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+        spriteBatch.begin()
+        font.setColor(0.15f, 0.15f, 0.15f, 1f)
+        val percent = (roads.readyProgress(focus.x, focus.z) * 100f).toInt()
+        glyphLayout.setText(font, "Loading road... $percent%")
+        font.draw(
+            spriteBatch, glyphLayout,
+            screenWidth / 2f - glyphLayout.width / 2f, screenHeight / 2f + glyphLayout.height / 2f
+        )
+        val roadError = roads.errorText
+        if (roadError != null) {
+            font.setColor(0.7f, 0.05f, 0.05f, 1f)
+            font.draw(
+                spriteBatch, roadError, screenWidth * 0.1f, screenHeight * 0.4f,
+                screenWidth * 0.8f, Align.center, true
+            )
+        }
+        font.setColor(1f, 1f, 1f, 0.8f)
+        spriteBatch.end()
     }
 
     /** Shows the exact exception text, so it can be copied back, and nothing else. */
@@ -607,6 +658,7 @@ class LagosDriftGame : ApplicationAdapter() {
         saveGame()
         if (::modelBatch.isInitialized) modelBatch.dispose()
         sky?.dispose()
+        if (::roads.isInitialized) roads.dispose()
         if (::carModel.isInitialized) carModel.dispose()
         if (::playerModel.isInitialized) playerModel.dispose()
         if (::spriteBatch.isInitialized) spriteBatch.dispose()
@@ -615,7 +667,12 @@ class LagosDriftGame : ApplicationAdapter() {
     }
 
     private companion object {
-        const val FAR_DISTANCE = 430f
+        // Far enough to see the tunnel mouth and the dam from about a kilometre away. The haze is in the
+        // sky colour, so the edge of the view fades out and chunks do not pop in.
+        const val FAR_DISTANCE = 1100f
+        const val LOADING_BUDGET_MS = 30    // milliseconds of loading work per frame on the start-up screen
+        const val STREAM_BUDGET_MS = 6      // and while playing, so the game does not freeze
+        const val ROAD_SPAWN_Y = 22.4f      // road height at the spawn point; the ground system replaces this
         const val SAVE_NAME = "lagosdrift_save"
         const val SAVE_VERSION = 2          // 1 was the old three-world game; those saves are ignored
         const val SAVE_EVERY_SECONDS = 5f
