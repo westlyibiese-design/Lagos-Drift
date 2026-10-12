@@ -13,7 +13,7 @@ import kotlin.math.sin
  * character turns to face the way it walks, like a person, and can jump. The yaw follows the
  * car's rule: 0 faces -Z and a positive yaw turns left.
  *
- * The feet follow the road: the height under them comes from RoadGround, and the player cannot walk
+ * The feet follow the ground (road, sand, tunnel and the floors of the houses): the height under them comes from RoadGround, and the player cannot walk
  * off the road surface. Walking up and down slopes and a jump both work.
  *
  * The model is baked in nine pieces (see HumanPose): the legs swing from the hips and bend at the
@@ -55,7 +55,7 @@ class PlayerController {
      */
     fun settleOnGround(knownY: Float = Float.NaN): Boolean {
         val refY = if (knownY.isNaN()) HIGH_REFERENCE else knownY + 0.5f
-        if (!RoadGround.findNearestRoad(position.x, position.z, SPAWN_SEARCH_RADIUS, refY, found)) return false
+        if (!RoadGround.carFindNearest(position.x, position.z, SPAWN_SEARCH_RADIUS, refY, found)) return false
         position.set(found.x, found.y, found.z)
         groundY = found.y
         verticalSpeed = 0f
@@ -99,7 +99,7 @@ class PlayerController {
         }
 
         // The feet follow the road height, and a jump leaves it and comes back down.
-        val ground = RoadGround.heightAt(position.x, position.z, position.y, MAX_DROP)
+        val ground = RoadGround.carHeightAt(position.x, position.z, position.y, MAX_DROP)
         if (!ground.isNaN()) groundY = ground
         if (jump && grounded) verticalSpeed = JUMP_SPEED
         if (grounded) {
@@ -148,7 +148,7 @@ class PlayerController {
         instance.calculateTransforms()
     }
 
-    private fun hasRoad(x: Float, z: Float): Boolean = RoadGround.isRoad(x, z, position.y, MAX_DROP)
+    private fun hasRoad(x: Float, z: Float): Boolean = !RoadGround.carHeightAt(x, z, position.y, MAX_DROP).isNaN()
 
     private fun wrap(angle: Float): Float {
         var a = angle

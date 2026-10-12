@@ -32,10 +32,15 @@ import kotlin.math.sqrt
  * At most [MAX_CARS] cars exist at once. They appear 110 to 300 m from the player, inside the corridor,
  * and disappear when far away or when they reach an end of the corridor.
  */
-class TrafficManager(private val camryModel: Model, private val danfoModel: Model?) {
-    private class Vehicle(val camryInstance: ModelInstance, val danfoInstance: ModelInstance?) {
+class TrafficManager(
+    private val camryModel: Model, private val danfoModel: Model?, private val truckModel: Model? = null
+) {
+    private class Vehicle(
+        val camryInstance: ModelInstance, val danfoInstance: ModelInstance?, val truckInstance: ModelInstance?
+    ) {
         var active = false
         var danfo = false
+        var truck = false
 
         var x = 0f
         var y = 0f
@@ -64,10 +69,19 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
         val wheelFR: Node? = camryInstance.getNode(CamryModelFactory.WHEEL_FR)
         val wheelRL: Node? = camryInstance.getNode(CamryModelFactory.WHEEL_RL)
         val wheelRR: Node? = camryInstance.getNode(CamryModelFactory.WHEEL_RR)
+
+        val truckFL: Node? = truckInstance?.getNode(SilveradoModelFactory.WHEEL_FL)
+        val truckFR: Node? = truckInstance?.getNode(SilveradoModelFactory.WHEEL_FR)
+        val truckRL: Node? = truckInstance?.getNode(SilveradoModelFactory.WHEEL_RL)
+        val truckRR: Node? = truckInstance?.getNode(SilveradoModelFactory.WHEEL_RR)
     }
 
     private val pool = Array(MAX_CARS) {
-        Vehicle(ModelInstance(camryModel), if (danfoModel != null) ModelInstance(danfoModel) else null)
+        Vehicle(
+            ModelInstance(camryModel),
+            if (danfoModel != null) ModelInstance(danfoModel) else null,
+            if (truckModel != null) ModelInstance(truckModel) else null
+        )
     }
 
     private val rng = Random()
@@ -341,8 +355,14 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
             if (dx * dx + dz * dz < SPAWN_CLEARANCE * SPAWN_CLEARANCE) return
         }
 
-        v.danfo = danfoModel != null && rng.nextFloat() < DANFO_SHARE
-        if (v.danfo) {
+        v.truck = truckModel != null && rng.nextFloat() < TRUCK_SHARE
+        v.danfo = !v.truck && danfoModel != null && rng.nextFloat() < DANFO_SHARE
+        if (v.truck) {
+            v.radius = 1.2f
+            v.offset = 1.45f
+            v.halfBase = SilveradoModelFactory.HALF_WHEELBASE
+            v.halfTrack = SilveradoModelFactory.HALF_TRACK
+        } else if (v.danfo) {
             v.radius = 1.15f
             v.offset = 1.25f
             v.halfBase = 1.5f
@@ -381,12 +401,23 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
             val dz = v.z - camera.position.z
             if (dx * dx + dz * dz > DRAW_RANGE * DRAW_RANGE) continue
             if (!camera.frustum.sphereInFrustum(v.x, v.y + 1.2f, v.z, 3.2f)) continue
-            val instance = if (v.danfo) (v.danfoInstance ?: continue) else v.camryInstance
+            val instance = when {
+                v.truck -> v.truckInstance ?: continue
+                v.danfo -> v.danfoInstance ?: continue
+                else -> v.camryInstance
+            }
             instance.transform.setToRotation(Vector3.Y, v.yaw)
                 .rotate(Vector3.X, v.pitch)
                 .rotate(Vector3.Z, v.roll)
                 .setTranslation(v.x, v.y, v.z)
-            if (!v.danfo) {
+            if (v.truck) {
+                wheelQ.set(Vector3.X, -v.wheelRoll)
+                v.truckFL?.rotation?.set(wheelQ)
+                v.truckFR?.rotation?.set(wheelQ)
+                v.truckRL?.rotation?.set(wheelQ)
+                v.truckRR?.rotation?.set(wheelQ)
+                instance.calculateTransforms()
+            } else if (!v.danfo) {
                 wheelQ.set(Vector3.X, -v.wheelRoll)
                 v.wheelFL?.rotation?.set(wheelQ)
                 v.wheelFR?.rotation?.set(wheelQ)
@@ -401,7 +432,7 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
     // ------------------------------------------------------------------ bumping
 
     /** Stops the player's car driving through traffic. Slows both. Each car is two circles, one near each end. */
-    fun collide(car: CarController) {
+    fun collide(car: CarController, carRadius: Float = CAR_RADIUS, carOffset: Float = CAR_OFFSET) {
         val rad = car.yawDegrees * 0.017453292f
         val cfx = -sin(rad)
         val cfz = -cos(rad)
@@ -415,13 +446,13 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
             var hit = false
             for (a in -1..1 step 2) {
                 for (b in -1..1 step 2) {
-                    val ax = car.position.x + cfx * CAR_OFFSET * a
-                    val az = car.position.z + cfz * CAR_OFFSET * a
+                    val ax = car.position.x + cfx * carOffset * a
+                    val az = car.position.z + cfz * carOffset * a
                     val bx = v.x + v.fx * v.offset * b
                     val bz = v.z + v.fz * v.offset * b
                     var ex = ax - bx
                     var ez = az - bz
-                    val limit = CAR_RADIUS + v.radius
+                    val limit = carRadius + v.radius
                     val d2 = ex * ex + ez * ez
                     if (d2 >= limit * limit) continue
                     var d = sqrt(d2)
@@ -482,6 +513,7 @@ class TrafficManager(private val camryModel: Model, private val danfoModel: Mode
     private companion object {
         const val MAX_CARS = 12
         const val DANFO_SHARE = 0.4f
+        const val TRUCK_SHARE = 0.25f
 
         // The traffic corridor: the straight stretch through the join to the far end of the tunnel.
         const val START_X = -470.5f

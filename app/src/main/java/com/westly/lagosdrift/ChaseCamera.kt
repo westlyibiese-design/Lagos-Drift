@@ -109,7 +109,7 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
         }
 
         // Never below the road under the camera.
-        val ground = RoadGround.heightAt(camera.position.x, camera.position.z, carPosition.y + 3f)
+        val ground = RoadGround.carHeightAt(camera.position.x, camera.position.z, carPosition.y + 3f, 100000f)
         if (!ground.isNaN() && camera.position.y < ground + MIN_GROUND_CLEARANCE) {
             camera.position.y = ground + MIN_GROUND_CLEARANCE
         }

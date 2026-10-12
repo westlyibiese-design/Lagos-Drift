@@ -50,7 +50,7 @@ class MapRenderer(private val baker: MapBaker) {
     /** Small map that turns so the car always points up. size is the square's side in pixels. */
     fun drawMini(
         shapes: ShapeRenderer, batch: SpriteBatch, car: Vector3, yawDegrees: Float, x: Float, y: Float, size: Float,
-        parked: List<Vector3>? = null
+        parked: List<Vector3>? = null, homes: List<Vector3>? = null
     ) {
         rotating = true
         carX = car.x
@@ -75,6 +75,7 @@ class MapRenderer(private val baker: MapBaker) {
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (parked != null) for (p in parked) parkedMarker(shapes, p, size * 0.05f)
+        if (homes != null) for (p in homes) homeMarker(shapes, p, size * 0.06f, true)
 
         // The player: always pointing up, with a white outline.
         val s = size * 0.07f
@@ -100,7 +101,7 @@ class MapRenderer(private val baker: MapBaker) {
     /** The big map, north at the top, showing whatever part of the world [view] is looking at. */
     fun drawFull(
         shapes: ShapeRenderer, batch: SpriteBatch, view: MapView, car: Vector3, yawDegrees: Float,
-        parked: List<Vector3>? = null
+        parked: List<Vector3>? = null, homes: List<Vector3>? = null
     ) {
         val w = view.width
         val h = view.height
@@ -132,6 +133,7 @@ class MapRenderer(private val baker: MapBaker) {
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (parked != null) for (p in parked) parkedMarker(shapes, p, h * 0.022f)
+        if (homes != null) for (p in homes) homeMarker(shapes, p, h * 0.028f, false)
 
         // The player, pointing the way they face (north is up).
         project(car.x, car.z)
@@ -188,6 +190,30 @@ class MapRenderer(private val baker: MapBaker) {
         shapes.rect(outX - half * 1.25f, outY - half * 1.25f, half * 2.5f, half * 2.5f)
         shapes.setColor(0.98f, 0.80f, 0.10f, 1f)
         shapes.rect(outX - half, outY - half, half * 2f, half * 2f)
+    }
+
+    /**
+     * A house: a green square with a white roof. On the small map a home that is further away than the
+     * map shows is kept on the edge of the map, so it always tells you which way to drive.
+     */
+    private fun homeMarker(shapes: ShapeRenderer, home: Vector3, half: Float, keepOnEdge: Boolean) {
+        project(home.x, home.z)
+        var x = outX
+        var y = outY
+        val inside = x >= clipX0 && x <= clipX1 && y >= clipY0 && y <= clipY1
+        if (!inside) {
+            if (!keepOnEdge) return
+            val pad = half * 1.6f
+            x = x.coerceIn(clipX0 + pad, clipX1 - pad)
+            y = y.coerceIn(clipY0 + pad, clipY1 - pad)
+        }
+        shapes.setColor(0.05f, 0.05f, 0.05f, 1f)
+        shapes.rect(x - half * 1.25f, y - half * 1.1f, half * 2.5f, half * 2.2f)
+        shapes.triangle(x - half * 1.6f, y + half * 0.7f, x + half * 1.6f, y + half * 0.7f, x, y + half * 2.0f)
+        shapes.setColor(0.12f, 0.70f, 0.30f, 1f)
+        shapes.rect(x - half, y - half * 0.85f, half * 2f, half * 1.7f)
+        shapes.setColor(1f, 1f, 1f, 1f)
+        shapes.triangle(x - half * 1.3f, y + half * 0.85f, x + half * 1.3f, y + half * 0.85f, x, y + half * 1.7f)
     }
 
     private fun arrow(shapes: ShapeRenderer, x: Float, y: Float, dirX: Float, dirY: Float, s: Float, color: Color) {

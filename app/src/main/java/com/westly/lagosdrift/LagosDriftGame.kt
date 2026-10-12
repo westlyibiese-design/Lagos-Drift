@@ -61,7 +61,25 @@ class LagosDriftGame : ApplicationAdapter() {
     private val wheelRoll = Quaternion()
 
     private val glyphLayout = GlyphLayout()
-    private val grind = CarController()
+    private val camry = CarController()
+    private val truck = CarController(
+        28f, 9.5f, 70f, SilveradoModelFactory.HALF_WHEELBASE, SilveradoModelFactory.HALF_TRACK
+    )
+
+    /** The vehicle being driven, or the one you last got out of: the Camry or the Silverado. */
+    private var grind: CarController = camry
+    private lateinit var truckModel: Model
+    private lateinit var truckInstance: ModelInstance
+    private lateinit var guardModel: Model
+    private lateinit var boyModel: Model
+    private lateinit var chibiModel: Model
+    private lateinit var homes: Homes
+    private lateinit var passersby: Passersby
+    private val homeMarkers = ArrayList<Vector3>()
+    private var truckRestored = false
+    private var savedTruckY = Float.NaN
+    private var homeIndex = 0
+    private var homeDistance = 0f
     private val audio = CarAudio()
     private var audioErrorShown = false
     private val parkedMarkers = ArrayList<Vector3>()
@@ -135,6 +153,11 @@ class LagosDriftGame : ApplicationAdapter() {
             carInstance = ModelInstance(carModel)
             playerModel = PlayerModelFactory.load()
             playerInstance = ModelInstance(playerModel)
+            truckModel = SilveradoModelFactory.load()
+            truckInstance = ModelInstance(truckModel)
+            guardModel = PlayerModelFactory.loadGuard()
+            boyModel = PlayerModelFactory.loadBoy()
+            chibiModel = PlayerModelFactory.loadChibi()
             sky = SkyDome("sky/sky_desert.jpg")
         } catch (e: Exception) {
             fatalError = "Could not load the game: $e"
@@ -143,7 +166,7 @@ class LagosDriftGame : ApplicationAdapter() {
 
         // Carry on where the last game stopped, if there is one; otherwise start at the spawn point.
         val resumed = restoreGame()
-        if (!resumed) grind.place(SPAWN_X, SPAWN_Z, SPAWN_YAW)
+        if (!resumed) camry.place(SPAWN_X, SPAWN_Z, SPAWN_YAW)
         focus.set(if (onFoot) player.position else grind.position)
         roads = RoadWorld(SKY_R, SKY_G, SKY_B)
 
@@ -154,7 +177,17 @@ class LagosDriftGame : ApplicationAdapter() {
         } catch (e: Exception) {
             showHint("Danfo traffic car could not be loaded: $e", 30f)
         }
-        traffic = TrafficManager(carModel, danfoModel)
+        traffic = TrafficManager(carModel, danfoModel, truckModel)
+        try {
+            homes = Homes(guardModel, danfoModel)
+        } catch (e: Exception) {
+            fatalError = "Could not load the houses: $e"
+            return
+        }
+        passersby = Passersby(boyModel, chibiModel)
+        for (i in 0 until homes.count) homeMarkers.add(homes.gate(i, Vector3()))
+        // The Silverado starts in the garage of the first house, unless the saved game says where it is.
+        if (!truckRestored) truck.place(homes.truckX, homes.truckZ, homes.truckYaw)
         audio.start()
         if (resumed) showHint("Welcome back - carrying on where you stopped", 5f)
     }
@@ -266,11 +299,20 @@ class LagosDriftGame : ApplicationAdapter() {
                     showHint("Slow down to get out")
                 }
             } else {
-                val dx = player.position.x - grind.position.x
-                val dz = player.position.z - grind.position.z
+                // The nearer of the two vehicles is the one to get into.
+                val toCamryX = player.position.x - camry.position.x
+                val toCamryZ = player.position.z - camry.position.z
+                val toTruckX = player.position.x - truck.position.x
+                val toTruckZ = player.position.z - truck.position.z
+                val target = if (toTruckX * toTruckX + toTruckZ * toTruckZ <
+                    toCamryX * toCamryX + toCamryZ * toCamryZ
+                ) truck else camry
+                val dx = player.position.x - target.position.x
+                val dz = player.position.z - target.position.z
                 if (doorSequence != 0) {
                     // Already busy with the door.
                 } else if (dx * dx + dz * dz <= ENTER_RANGE * ENTER_RANGE) {
+                    grind = target
                     // Walk to the seat.
                     tmp.set(0f, 0f, -1f).rotate(Vector3.Y, grind.yawDegrees + 90f)
                     seqFrom.set(player.position)
@@ -279,7 +321,7 @@ class LagosDriftGame : ApplicationAdapter() {
                     doorTimer = 0f
                     hasWalkTarget = false
                 } else {
-                    showHint("Too far from the car")
+                    showHint("Too far from a car")
                 }
             }
         }
@@ -300,18 +342,32 @@ class LagosDriftGame : ApplicationAdapter() {
             } else {
                 grind.update(delta, 0f, false, false)
             }
+            // The vehicle that is not being driven stays where it was left, settling on its springs.
+            val parkedCar = if (grind === camry) truck else camry
+            parkedCar.update(delta, 0f, false, false)
+
             if (onFoot && doorSequence != 0) {
                 runDoorSequence(delta)
             } else if (onFoot) {
                 walkOnFoot(delta)
                 pushPlayerOutOfCar()
+                homes.pushPlayer(player.position, PLAYER_RADIUS)
+                passersby.pushOut(player.position, PLAYER_RADIUS)
             }
 
             // Traffic drives about, and bumps the car (and the walking player) but is never driven.
             val subject = if (onFoot) player.position else grind.position
             traffic.update(delta, subject.x, subject.z, grind.position.x, grind.position.z, grind.yawDegrees, grind.speed)
-            traffic.collide(grind)
+            if (grind === truck) {
+                traffic.collide(grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
+                if (!onFoot) homes.pushCar(grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
+            } else {
+                traffic.collide(grind)
+                if (!onFoot) homes.pushCar(grind, CAR_RADIUS, CAR_OFFSET)
+            }
+            collideVehicles()
             if (onFoot && doorSequence == 0) traffic.pushOut(player.position, PLAYER_RADIUS)
+            passersby.update(delta, subject.x, subject.y, subject.z)
         }
 
         // The sound follows the car: the engine, the tyres, rough ground, knocks, and the echo in the tunnel.
@@ -337,12 +393,14 @@ class LagosDriftGame : ApplicationAdapter() {
         roads.update(delta, focus.x, focus.z, STREAM_BUDGET_MS)
 
         // The car leans with the road: heading, then nose up/down, then side to side.
-        carInstance.transform.setToRotation(Vector3.Y, grind.yawDegrees)
-            .rotate(Vector3.X, grind.pitchDegrees)
-            .rotate(Vector3.Z, grind.rollDegrees)
-            .setTranslation(grind.position.x, grind.position.y, grind.position.z)
-        updateWheels()
-        carInstance.calculateTransforms()
+        poseVehicle(
+            camry, carInstance, CamryModelFactory.WHEEL_FL, CamryModelFactory.WHEEL_FR,
+            CamryModelFactory.WHEEL_RL, CamryModelFactory.WHEEL_RR
+        )
+        poseVehicle(
+            truck, truckInstance, SilveradoModelFactory.WHEEL_FL, SilveradoModelFactory.WHEEL_FR,
+            SilveradoModelFactory.WHEEL_RL, SilveradoModelFactory.WHEEL_RR
+        )
         if (onFoot) player.applyTo(playerInstance, clock)
 
         val scaleTarget = if (onFoot) ON_FOOT_CAMERA_SCALE else 1f
@@ -366,6 +424,9 @@ class LagosDriftGame : ApplicationAdapter() {
         roads.render(modelBatch, camera)
         traffic.render(modelBatch, environment, camera)
         modelBatch.render(carInstance, environment)
+        modelBatch.render(truckInstance, environment)
+        homes.render(modelBatch, environment, camera)
+        passersby.render(modelBatch, environment, camera)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
 
@@ -374,11 +435,12 @@ class LagosDriftGame : ApplicationAdapter() {
 
         // Your Camry is marked on the maps while you walk.
         parkedMarkers.clear()
+        parkedMarkers.add((if (grind === camry) truck else camry).position)
         if (onFoot) parkedMarkers.add(grind.position)
         val parked: List<Vector3> = parkedMarkers
         if (mapOpen) {
             // The map draws the sand, the road picture and the arrows (it opens and closes the renderers itself).
-            mapRenderer.drawFull(shapeRenderer, spriteBatch, mapView, focus, focusYaw, parked)
+            mapRenderer.drawFull(shapeRenderer, spriteBatch, mapView, focus, focusYaw, parked, homeMarkers)
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
             mapView.drawShapes(shapeRenderer)
             shapeRenderer.end()
@@ -386,7 +448,7 @@ class LagosDriftGame : ApplicationAdapter() {
             // The small map is cut off at its edges with a scissor box.
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(miniX.toInt(), miniY.toInt(), miniSize.toInt(), miniSize.toInt())
-            mapRenderer.drawMini(shapeRenderer, spriteBatch, focus, focusYaw, miniX, miniY, miniSize, parked)
+            mapRenderer.drawMini(shapeRenderer, spriteBatch, focus, focusYaw, miniX, miniY, miniSize, parked, homeMarkers)
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
 
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
@@ -397,6 +459,7 @@ class LagosDriftGame : ApplicationAdapter() {
         // Touch buttons.
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
         controls.drawShapes(shapeRenderer)
+        if (!mapOpen) drawHomeArrow()
         shapeRenderer.end()
 
         // Text.
@@ -434,6 +497,14 @@ class LagosDriftGame : ApplicationAdapter() {
                 )
                 font.data.setScale(textScale)
             }
+
+            // Which way home is, and how far.
+            glyphLayout.setText(font, homeText())
+            font.draw(
+                spriteBatch, glyphLayout,
+                screenWidth / 2f - glyphLayout.width / 2f,
+                screenHeight - margin - screenHeight * 0.035f * 2.9f
+            )
 
             // Where you are.
             glyphLayout.setText(font, placeText())
@@ -606,17 +677,61 @@ class LagosDriftGame : ApplicationAdapter() {
 
     /** Keeps the walking player out of the Camry (the car is two circles, one near each end). */
     private fun pushPlayerOutOfCar() {
-        val rad = grind.yawDegrees * MathUtils.degreesToRadians
-        val ox = -sin(rad) * CAR_OFFSET
-        val oz = -cos(rad) * CAR_OFFSET
-        pushOutOfCircle(grind.position.x + ox, grind.position.z + oz)
-        pushOutOfCircle(grind.position.x - ox, grind.position.z - oz)
+        pushPlayerOutOf(camry, CAR_OFFSET, CAR_RADIUS)
+        pushPlayerOutOf(truck, SilveradoModelFactory.CAR_OFFSET, SilveradoModelFactory.CAR_RADIUS)
     }
 
-    private fun pushOutOfCircle(cx: Float, cz: Float) {
+    private fun pushPlayerOutOf(car: CarController, offset: Float, radius: Float) {
+        val rad = car.yawDegrees * MathUtils.degreesToRadians
+        val ox = -sin(rad) * offset
+        val oz = -cos(rad) * offset
+        pushOutOfCircle(car.position.x + ox, car.position.z + oz, radius)
+        pushOutOfCircle(car.position.x - ox, car.position.z - oz, radius)
+    }
+
+    /** The vehicle you drive cannot go through the one that is parked: each is two circles, one near each end. */
+    private fun collideVehicles() {
+        val a = grind
+        val b = if (a === camry) truck else camry
+        val aOffset = if (a === truck) SilveradoModelFactory.CAR_OFFSET else CAR_OFFSET
+        val aRadius = if (a === truck) SilveradoModelFactory.CAR_RADIUS else CAR_RADIUS
+        val bOffset = if (b === truck) SilveradoModelFactory.CAR_OFFSET else CAR_OFFSET
+        val bRadius = if (b === truck) SilveradoModelFactory.CAR_RADIUS else CAR_RADIUS
+        val dx = b.position.x - a.position.x
+        val dz = b.position.z - a.position.z
+        if (dx * dx + dz * dz > 100f) return
+        val aRad = a.yawDegrees * MathUtils.degreesToRadians
+        val bRad = b.yawDegrees * MathUtils.degreesToRadians
+        var hit = false
+        for (i in -1..1 step 2) {
+            for (j in -1..1 step 2) {
+                val ax = a.position.x - sin(aRad) * aOffset * i
+                val az = a.position.z - cos(aRad) * aOffset * i
+                val bx = b.position.x - sin(bRad) * bOffset * j
+                val bz = b.position.z - cos(bRad) * bOffset * j
+                var ex = ax - bx
+                var ez = az - bz
+                val limit = aRadius + bRadius
+                val d2 = ex * ex + ez * ez
+                if (d2 >= limit * limit) continue
+                var d = sqrt(d2)
+                if (d < 0.001f) {
+                    ex = 1f
+                    ez = 0f
+                    d = 1f
+                }
+                a.position.x += ex / d * (limit - d)
+                a.position.z += ez / d * (limit - d)
+                hit = true
+            }
+        }
+        if (hit) a.bump(0.6f)
+    }
+
+    private fun pushOutOfCircle(cx: Float, cz: Float, radius: Float) {
         val ex = player.position.x - cx
         val ez = player.position.z - cz
-        val limit = PLAYER_RADIUS + CAR_RADIUS
+        val limit = PLAYER_RADIUS + radius
         val d2 = ex * ex + ez * ez
         if (d2 >= limit * limit) return
         val d = maxOf(sqrt(d2), 0.001f)
@@ -630,11 +745,14 @@ class LagosDriftGame : ApplicationAdapter() {
     }
 
     /** "GLEN CANYON ROAD" on the open road, "TUNNEL" inside the Futatsugoya tunnel. */
-    private fun placeText(): String = if (RoadGround.inTunnel(focus.x, focus.z)) "TUNNEL" else "GLEN CANYON ROAD"
+    private fun placeText(): String = homes.nameNear(focus.x, focus.z)
+        ?: if (RoadGround.inTunnel(focus.x, focus.z)) "TUNNEL" else "GLEN CANYON ROAD"
 
     /** Once the road around the start is loaded: puts the car (and the player, if walking) on the road. */
     private fun settleOnGround() {
-        if (!grind.settleOnGround(savedCarY)) showHint("Could not find the road under the car", 8f)
+        if (!camry.settleOnGround(savedCarY)) showHint("Could not find the road under the car", 8f)
+        if (!truck.settleOnGround(savedTruckY)) showHint("Could not find the ground under the Silverado", 8f)
+        homes.settle()
         if (onFoot && !player.settleOnGround(savedPlayerY)) showHint("Could not find the road under you", 8f)
     }
 
@@ -649,16 +767,71 @@ class LagosDriftGame : ApplicationAdapter() {
         if (fatalError == null && ::traffic.isInitialized) audio.start()
     }
 
-    /** Front wheels steer with the steering, all four wheels roll with the speed. */
-    private fun updateWheels() {
-        val roll = -grind.wheelRollDegrees
-        val steer = -grind.steerAmount * MAX_WHEEL_STEER
+    /**
+     * Puts a vehicle where it is: heading, then nose up/down, then side to side. The front wheels steer with the
+     * steering and all four wheels roll with the speed.
+     */
+    private fun poseVehicle(car: CarController, instance: ModelInstance, fl: String, fr: String, rl: String, rr: String) {
+        instance.transform.setToRotation(Vector3.Y, car.yawDegrees)
+            .rotate(Vector3.X, car.pitchDegrees)
+            .rotate(Vector3.Z, car.rollDegrees)
+            .setTranslation(car.position.x, car.position.y, car.position.z)
+        val roll = -car.wheelRollDegrees
+        val steer = -car.steerAmount * MAX_WHEEL_STEER
         wheelRoll.set(Vector3.X, roll)
-        carInstance.getNode(CamryModelFactory.WHEEL_RL)?.rotation?.set(wheelRoll)
-        carInstance.getNode(CamryModelFactory.WHEEL_RR)?.rotation?.set(wheelRoll)
+        instance.getNode(rl)?.rotation?.set(wheelRoll)
+        instance.getNode(rr)?.rotation?.set(wheelRoll)
         wheelSteer.set(Vector3.Y, steer).mul(wheelRoll)
-        carInstance.getNode(CamryModelFactory.WHEEL_FL)?.rotation?.set(wheelSteer)
-        carInstance.getNode(CamryModelFactory.WHEEL_FR)?.rotation?.set(wheelSteer)
+        instance.getNode(fl)?.rotation?.set(wheelSteer)
+        instance.getNode(fr)?.rotation?.set(wheelSteer)
+        instance.calculateTransforms()
+    }
+
+    /** An arrow at the top of the screen that points to the nearest house, drawn in the shape pass. */
+    private fun drawHomeArrow() {
+        homeIndex = homes.nearest(focus.x, focus.z)
+        homes.gate(homeIndex, tmp)
+        val dx = tmp.x - focus.x
+        val dz = tmp.z - focus.z
+        homeDistance = sqrt(dx * dx + dz * dz)
+        if (homeDistance < HOME_ARRIVED) return
+        val fx = camera.direction.x
+        val fz = camera.direction.z
+        val fl = sqrt(fx * fx + fz * fz)
+        if (fl < 1e-4f) return
+        val nfx = fx / fl
+        val nfz = fz / fl
+        val ahead = dx * nfx + dz * nfz
+        val right = -dx * nfz + dz * nfx
+        val len = sqrt(ahead * ahead + right * right)
+        if (len < 1e-4f) return
+        val ux = right / len
+        val uy = ahead / len
+        val size = screenHeight * 0.035f
+        val cx = screenWidth / 2f
+        val cy = screenHeight - margin - size * 1.6f
+        val sx = -uy
+        val sy = ux
+        // A dark arrow behind, a green one on top.
+        for (pass in 0..1) {
+            val k = if (pass == 0) 1.25f else 1f
+            if (pass == 0) shapeRenderer.setColor(0.05f, 0.05f, 0.05f, 0.85f) else shapeRenderer.setColor(0.12f, 0.80f, 0.35f, 1f)
+            shapeRenderer.triangle(
+                cx + ux * size * k, cy + uy * size * k,
+                cx - ux * size * 0.7f * k + sx * size * 0.75f * k, cy - uy * size * 0.7f * k + sy * size * 0.75f * k,
+                cx - ux * size * 0.7f * k - sx * size * 0.75f * k, cy - uy * size * 0.7f * k - sy * size * 0.75f * k
+            )
+        }
+    }
+
+    /** "HOME 1  240 m", or "HOME 1 - you are here" at the gate. */
+    private fun homeText(): String {
+        val name = homes.label(homeIndex)
+        return when {
+            homeDistance < HOME_ARRIVED -> "$name - you are here"
+            homeDistance >= 1000f -> "$name  ${"%.1f".format(homeDistance / 1000f)} km"
+            else -> "$name  ${homeDistance.toInt()} m"
+        }
     }
 
     /**
@@ -680,10 +853,15 @@ class LagosDriftGame : ApplicationAdapter() {
         }
         val p = Gdx.app.getPreferences(SAVE_NAME)
         p.putInteger("version", SAVE_VERSION)
-        p.putFloat("car_x", grind.position.x)
-        p.putFloat("car_z", grind.position.z)
-        p.putFloat("car_y", grind.position.y)
-        p.putFloat("car_yaw", grind.yawDegrees)
+        p.putFloat("car_x", camry.position.x)
+        p.putFloat("car_z", camry.position.z)
+        p.putFloat("car_y", camry.position.y)
+        p.putFloat("car_yaw", camry.yawDegrees)
+        p.putFloat("truck_x", truck.position.x)
+        p.putFloat("truck_z", truck.position.z)
+        p.putFloat("truck_y", truck.position.y)
+        p.putFloat("truck_yaw", truck.yawDegrees)
+        p.putBoolean("drive_truck", grind === truck)
         p.putFloat("player_x", px)
         p.putFloat("player_z", pz)
         p.putFloat("player_y", py)
@@ -710,7 +888,20 @@ class LagosDriftGame : ApplicationAdapter() {
         // The heights are read when the road is loaded; a saved height tells the levels apart on bridges.
         savedCarY = p.getFloat("car_y", Float.NaN)
         savedPlayerY = p.getFloat("player_y", Float.NaN)
-        grind.place(values[0], values[1], values[2])
+        camry.place(values[0], values[1], values[2])
+        if (p.contains("truck_x")) {
+            val tx = p.getFloat("truck_x")
+            val tz = p.getFloat("truck_z")
+            val tyaw = p.getFloat("truck_yaw")
+            if (!tx.isNaN() && !tz.isNaN() && !tyaw.isNaN() &&
+                tx >= WorldLimits.MIN_X && tx <= WorldLimits.MAX_X && tz >= WorldLimits.MIN_Z && tz <= WorldLimits.MAX_Z
+            ) {
+                truck.place(tx, tz, tyaw)
+                savedTruckY = p.getFloat("truck_y", Float.NaN)
+                truckRestored = true
+            }
+        }
+        grind = if (p.getBoolean("drive_truck") && truckRestored) truck else camry
         onFoot = p.getBoolean("on_foot")
         doorSequence = 0
         hasWalkTarget = false
@@ -736,6 +927,11 @@ class LagosDriftGame : ApplicationAdapter() {
         if (::roads.isInitialized) roads.dispose()
         mapBaker.dispose()
         danfoModel?.dispose()
+        if (::homes.isInitialized) homes.dispose()
+        if (::truckModel.isInitialized) truckModel.dispose()
+        if (::guardModel.isInitialized) guardModel.dispose()
+        if (::boyModel.isInitialized) boyModel.dispose()
+        if (::chibiModel.isInitialized) chibiModel.dispose()
         if (::carModel.isInitialized) carModel.dispose()
         if (::playerModel.isInitialized) playerModel.dispose()
         if (::spriteBatch.isInitialized) spriteBatch.dispose()
@@ -757,6 +953,7 @@ class LagosDriftGame : ApplicationAdapter() {
         const val DOOR_WALK_TIME = 0.6f     // seconds to step out or in
         const val SEAT_SIDE = 0.35f         // seat position, metres left of the car centre
         const val ENTER_RANGE = 4.5f
+        const val HOME_ARRIVED = 30f        // closer than this to a gate: "you are here"
         const val CAR_EXIT_SIDE = 2.4f
         const val CAR_RADIUS = 1.1f
         const val CAR_OFFSET = 1.2f

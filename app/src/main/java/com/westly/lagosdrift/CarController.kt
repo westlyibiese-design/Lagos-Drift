@@ -24,7 +24,9 @@ import kotlin.math.sqrt
 class CarController(
     private val topSpeed: Float = 30f,
     private val accel: Float = 11f,
-    private val turnRate: Float = 80f
+    private val turnRate: Float = 80f,
+    private val halfWheelbase: Float = 1.388f,
+    private val halfTrack: Float = 0.79f
 ) {
     val position = Vector3()
 
@@ -289,8 +291,8 @@ class CarController(
         val rightZ = -sinYaw
         val drop = if (isAirborne) MAX_DROP_AIR else MAX_DROP
         for (i in 0 until 4) {
-            val px = cx + fwdX * FRONT[i] * HALF_WHEELBASE + rightX * SIDE[i] * HALF_TRACK
-            val pz = cz + fwdZ * FRONT[i] * HALF_WHEELBASE + rightZ * SIDE[i] * HALF_TRACK
+            val px = cx + fwdX * FRONT[i] * halfWheelbase + rightX * SIDE[i] * halfTrack
+            val pz = cz + fwdZ * FRONT[i] * halfWheelbase + rightZ * SIDE[i] * halfTrack
             val h = RoadGround.carHeightAt(px, pz, refY, drop)
             if (h.isNaN()) return false
             wheelY[i] = h
@@ -335,8 +337,8 @@ class CarController(
         val left = (wheelY[0] + wheelY[2]) / 2f
         val right = (wheelY[1] + wheelY[3]) / 2f
         val targetY = (wheelY[0] + wheelY[1] + wheelY[2] + wheelY[3]) / 4f
-        val targetPitch = Math.toDegrees(atan2((front - rear).toDouble(), (2f * HALF_WHEELBASE).toDouble())).toFloat()
-        val targetRoll = Math.toDegrees(atan2((right - left).toDouble(), (2f * HALF_TRACK).toDouble())).toFloat()
+        val targetPitch = Math.toDegrees(atan2((front - rear).toDouble(), (2f * halfWheelbase).toDouble())).toFloat()
+        val targetRoll = Math.toDegrees(atan2((right - left).toDouble(), (2f * halfTrack).toDouble())).toFloat()
         groundRef = targetY
         if (dt <= 0f) {
             position.y = targetY
@@ -506,9 +508,6 @@ class CarController(
         const val SLOPE_FACTOR = 0.35f
         const val SLOPE_MAX = 3f
 
-        // The Camry's wheels (from the model): 2.776 m between axles, 1.564 m between wheel centres.
-        const val HALF_WHEELBASE = 1.388f
-        const val HALF_TRACK = 0.79f
         val FRONT = floatArrayOf(1f, 1f, -1f, -1f)
         val SIDE = floatArrayOf(-1f, 1f, -1f, 1f)
 

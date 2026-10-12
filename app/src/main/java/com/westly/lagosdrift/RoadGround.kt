@@ -114,6 +114,22 @@ object RoadGround {
 
     private val patches = ArrayList<Patch>()
     private val terrainPatches = ArrayList<Patch>()
+    private val floorPatches = ArrayList<Patch>()
+    private val blocks = ArrayList<Block>()
+
+    /** A box on the ground (turned by [cos]/[sin] of its yaw) where the sand is not ground: a wall. A door box lifts it again. */
+    private class Block(
+        val cx: Float, val cz: Float, val hx: Float, val hz: Float,
+        val cos: Float, val sin: Float, val door: Boolean
+    ) {
+        fun contains(x: Float, z: Float): Boolean {
+            val dx = x - cx
+            val dz = z - cz
+            val lx = dx * cos - dz * sin
+            val lz = dx * sin + dz * cos
+            return abs(lx) <= hx && abs(lz) <= hz
+        }
+    }
 
     // The answer of the last successful sample().
     private var sampleY = 0f
@@ -170,11 +186,75 @@ object RoadGround {
             if (terrainPatches[i].key == key) terrainPatches.removeAt(i)
             i--
         }
+        i = floorPatches.size - 1
+        while (i >= 0) {
+            if (floorPatches[i].key == key) floorPatches.removeAt(i)
+            i--
+        }
     }
 
     fun clear() {
         patches.clear()
         terrainPatches.clear()
+        floorPatches.clear()
+        blocks.clear()
+    }
+
+    /** The floors of a building: [world] is triangles in world coordinates, 9 numbers (x y z three times) each. */
+    fun addFloors(key: String, world: FloatArray) {
+        val out = FloatList()
+        for (t in 0 until world.size / 9) {
+            val o = t * 9
+            val x1 = world[o]
+            val y1 = world[o + 1]
+            val z1 = world[o + 2]
+            val x2 = world[o + 3]
+            val y2 = world[o + 4]
+            val z2 = world[o + 5]
+            val x3 = world[o + 6]
+            val y3 = world[o + 7]
+            val z3 = world[o + 8]
+            val e1x = x2 - x1
+            val e1y = y2 - y1
+            val e1z = z2 - z1
+            val e2x = x3 - x1
+            val e2y = y3 - y1
+            val e2z = z3 - z1
+            var nx = e1y * e2z - e1z * e2y
+            var ny = e1z * e2x - e1x * e2z
+            var nz = e1x * e2y - e1y * e2x
+            val len = sqrt(nx * nx + ny * ny + nz * nz)
+            if (len < 1e-6f) continue
+            nx /= len
+            ny /= len
+            nz /= len
+            if (ny < 0f) {
+                nx = -nx
+                ny = -ny
+                nz = -nz
+            }
+            val denominator = (z2 - z3) * (x1 - x3) + (x3 - x2) * (z1 - z3)
+            if (abs(denominator) < 1e-6f) continue
+            out.add(x1); out.add(y1); out.add(z1)
+            out.add(x2); out.add(y2); out.add(z2)
+            out.add(x3); out.add(y3); out.add(z3)
+            out.add(1f / denominator)
+            out.add(nx); out.add(ny); out.add(nz)
+        }
+        if (out.size > 0) floorPatches.add(buildPatch(key, out.toArray()))
+    }
+
+    /** Adds a wall: a box at (cx, cz), half sizes hx / hz in its own frame, turned by [yawDegrees]. A [door] lifts the wall again. */
+    fun addBlock(cx: Float, cz: Float, hx: Float, hz: Float, yawDegrees: Float, door: Boolean = false) {
+        val r = yawDegrees * 0.017453292f
+        blocks.add(Block(cx, cz, hx, hz, cos(r), sin(r), door))
+    }
+
+    private fun blocked(x: Float, z: Float): Boolean {
+        if (blocks.isEmpty()) return false
+        for (b in blocks) if (b.door && b.contains(x, z)) return false
+        for (b in blocks) if (!b.door && b.contains(x, z)) return true
+        return false
     }
 
     private fun kindOf(materialId: String): Int {
@@ -458,6 +538,10 @@ object RoadGround {
             lastKind = if (inCorridor(x, z, 0f)) SURFACE_TUNNEL else SURFACE_ROAD
             return sampleY
         }
+        if (floorPatches.size > 0 && sampleIn(floorPatches, x, z, refY, maxDrop, Float.MAX_VALUE)) {
+            lastKind = SURFACE_ROAD
+            return sampleY
+        }
         if (inFloorZone) {
             val y = fitted + tunnelRough(along, side)
             if (y <= refY + STEP_UP && y >= refY - maxDrop) {
@@ -465,6 +549,7 @@ object RoadGround {
                 return y
             }
         }
+        if (blocked(x, z)) return Float.NaN
         if (sampleIn(terrainPatches, x, z, refY, maxDrop, Float.MAX_VALUE)) {
             lastKind = SURFACE_TERRAIN
             return sampleY + terrainRough(x, z)
