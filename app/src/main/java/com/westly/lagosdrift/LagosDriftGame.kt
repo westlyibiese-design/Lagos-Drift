@@ -44,6 +44,15 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var playerModel: Model
     private lateinit var playerInstance: ModelInstance
     private lateinit var carInstance: ModelInstance
+    private lateinit var interiorModel: Model
+    private lateinit var camryInterior: ModelInstance
+    private lateinit var truckInterior: ModelInstance
+    private val camryDoors = VehicleDoors(CamryModelFactory.DOORS, CamryModelFactory.DOOR_OPEN_DEGREES)
+    private val truckDoors = VehicleDoors(SilveradoModelFactory.DOORS, SilveradoModelFactory.DOOR_OPEN_DEGREES)
+
+    // After you get out or in, the doors of that car shut again once the timer runs out.
+    private var closeCar: CarController? = null
+    private var closeTimer = 0f
     private lateinit var spriteBatch: SpriteBatch
     private lateinit var shapeRenderer: ShapeRenderer
     private lateinit var font: BitmapFont
@@ -155,6 +164,9 @@ class LagosDriftGame : ApplicationAdapter() {
             playerInstance = ModelInstance(playerModel)
             truckModel = SilveradoModelFactory.load()
             truckInstance = ModelInstance(truckModel)
+            interiorModel = InteriorModelFactory.load()
+            camryInterior = ModelInstance(interiorModel)
+            truckInterior = ModelInstance(interiorModel)
             guardModel = PlayerModelFactory.loadGuard()
             boyModel = PlayerModelFactory.loadBoy()
             chibiModel = PlayerModelFactory.loadChibi()
@@ -290,6 +302,8 @@ class LagosDriftGame : ApplicationAdapter() {
                     player.position.y = grind.position.y
                     doorSequence = 1
                     doorTimer = 0f
+                    doorsOf(grind).open()
+                    if (closeCar === grind) closeCar = null
                     onFoot = true
                     hasWalkTarget = false
                     chaseCamera.freeLook = true
@@ -319,12 +333,16 @@ class LagosDriftGame : ApplicationAdapter() {
                     seqTo.set(grind.position.x + tmp.x * SEAT_SIDE, grind.position.y, grind.position.z + tmp.z * SEAT_SIDE)
                     doorSequence = 2
                     doorTimer = 0f
+                    doorsOf(grind).open()
+                    if (closeCar === grind) closeCar = null
                     hasWalkTarget = false
                 } else {
                     showHint("Too far from a car")
                 }
             }
         }
+
+        updateDoors(delta)
 
         // Zoom: pinch, or hold + / -. The map uses pinch for itself while it is open.
         var zoom = chaseCamera.zoom
@@ -395,11 +413,16 @@ class LagosDriftGame : ApplicationAdapter() {
         // The car leans with the road: heading, then nose up/down, then side to side.
         poseVehicle(
             camry, carInstance, CamryModelFactory.WHEEL_FL, CamryModelFactory.WHEEL_FR,
-            CamryModelFactory.WHEEL_RL, CamryModelFactory.WHEEL_RR
+            CamryModelFactory.WHEEL_RL, CamryModelFactory.WHEEL_RR, camryDoors
         )
         poseVehicle(
             truck, truckInstance, SilveradoModelFactory.WHEEL_FL, SilveradoModelFactory.WHEEL_FR,
-            SilveradoModelFactory.WHEEL_RL, SilveradoModelFactory.WHEEL_RR
+            SilveradoModelFactory.WHEEL_RL, SilveradoModelFactory.WHEEL_RR, truckDoors
+        )
+        poseInterior(camry, camryInterior, 1f, 1f, 1f, 0f, 0f)
+        poseInterior(
+            truck, truckInterior, SilveradoModelFactory.INTERIOR_SCALE_X, SilveradoModelFactory.INTERIOR_SCALE_Y,
+            SilveradoModelFactory.INTERIOR_SCALE_Z, SilveradoModelFactory.INTERIOR_LIFT, SilveradoModelFactory.INTERIOR_SHIFT_Z
         )
         if (onFoot) player.applyTo(playerInstance, clock)
 
@@ -407,6 +430,19 @@ class LagosDriftGame : ApplicationAdapter() {
         chaseCamera.distanceScale += (scaleTarget - chaseCamera.distanceScale) * minOf(1f, 4f * delta)
         val followSpeed = if (onFoot) player.speed else grind.speed
         chaseCamera.tunnelLimit = RoadGround.inTunnel(focus.x, focus.z)
+        if (onFoot) {
+            chaseCamera.hoodBack = 0.15f
+            chaseCamera.hoodHeight = 1.3f
+            chaseCamera.hoodSide = 0f
+        } else if (grind === truck) {
+            chaseCamera.hoodBack = SilveradoModelFactory.HOOD_BACK
+            chaseCamera.hoodHeight = SilveradoModelFactory.HOOD_HEIGHT
+            chaseCamera.hoodSide = SilveradoModelFactory.HOOD_SIDE
+        } else {
+            chaseCamera.hoodBack = CamryModelFactory.HOOD_BACK
+            chaseCamera.hoodHeight = CamryModelFactory.HOOD_HEIGHT
+            chaseCamera.hoodSide = CamryModelFactory.HOOD_SIDE
+        }
         chaseCamera.update(focus, focusYaw, followSpeed, delta, viewMode)
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
@@ -423,8 +459,10 @@ class LagosDriftGame : ApplicationAdapter() {
         modelBatch.begin(camera)
         roads.render(modelBatch, camera)
         traffic.render(modelBatch, environment, camera)
-        modelBatch.render(carInstance, environment)
-        modelBatch.render(truckInstance, environment)
+        // In the hood view you sit inside: the body is not drawn, the inside of the car is.
+        val insideCar = !onFoot && viewMode == ChaseCamera.MODE_HOOD
+        renderVehicle(carInstance, camryInterior, insideCar && grind === camry, camryDoors)
+        renderVehicle(truckInstance, truckInterior, insideCar && grind === truck, truckDoors)
         homes.render(modelBatch, environment, camera)
         passersby.render(modelBatch, environment, camera)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
@@ -484,6 +522,8 @@ class LagosDriftGame : ApplicationAdapter() {
             creditLine(CamryModelFactory.CREDIT, 2.6f)
             creditLine(ROAD_CREDIT, 4.2f)
             creditLine(TUNNEL_CREDIT, 5.8f)
+            creditLine(SilveradoModelFactory.CREDIT, 7.4f)
+            creditLine(InteriorModelFactory.CREDIT, 9.0f)
             font.data.setScale(textScale)
             font.setColor(1f, 1f, 1f, 0.8f)
 
@@ -609,6 +649,7 @@ class LagosDriftGame : ApplicationAdapter() {
         )
 
         if (doorTimer >= moveEnd) {
+            scheduleDoorClose(grind, if (doorSequence == 1) CLOSE_AFTER_EXIT else CLOSE_AFTER_ENTER)
             if (doorSequence == 2) {
                 onFoot = false
                 chaseCamera.freeLook = false
@@ -771,7 +812,9 @@ class LagosDriftGame : ApplicationAdapter() {
      * Puts a vehicle where it is: heading, then nose up/down, then side to side. The front wheels steer with the
      * steering and all four wheels roll with the speed.
      */
-    private fun poseVehicle(car: CarController, instance: ModelInstance, fl: String, fr: String, rl: String, rr: String) {
+    private fun poseVehicle(
+        car: CarController, instance: ModelInstance, fl: String, fr: String, rl: String, rr: String, doors: VehicleDoors
+    ) {
         instance.transform.setToRotation(Vector3.Y, car.yawDegrees)
             .rotate(Vector3.X, car.pitchDegrees)
             .rotate(Vector3.Z, car.rollDegrees)
@@ -784,7 +827,98 @@ class LagosDriftGame : ApplicationAdapter() {
         wheelSteer.set(Vector3.Y, steer).mul(wheelRoll)
         instance.getNode(fl)?.rotation?.set(wheelSteer)
         instance.getNode(fr)?.rotation?.set(wheelSteer)
+        doors.apply(instance)
         instance.calculateTransforms()
+    }
+
+    // ------------------------------------------------------------------ doors and the inside of the car
+
+    private fun doorsOf(car: CarController): VehicleDoors = if (car === truck) truckDoors else camryDoors
+
+    /** The vehicle you could open the door of or get into: the nearer of the two, if it is within reach. */
+    private fun vehicleWithinReach(): CarController? {
+        val toCamryX = player.position.x - camry.position.x
+        val toCamryZ = player.position.z - camry.position.z
+        val toTruckX = player.position.x - truck.position.x
+        val toTruckZ = player.position.z - truck.position.z
+        val camryD = toCamryX * toCamryX + toCamryZ * toCamryZ
+        val truckD = toTruckX * toTruckX + toTruckZ * toTruckZ
+        val nearest = if (truckD < camryD) truck else camry
+        return if (minOf(camryD, truckD) <= ENTER_RANGE * ENTER_RANGE) nearest else null
+    }
+
+    private fun scheduleDoorClose(car: CarController, seconds: Float) {
+        closeCar = car
+        closeTimer = seconds
+    }
+
+    /**
+     * The DOOR button opens or shuts the doors of the car you sit in, or of the one you stand next to. It does
+     * nothing else: you only get out of the car with EXIT. The doors shut by themselves after you get out or in,
+     * never stay open while the car drives off, and shut behind you when you walk away from a car.
+     */
+    private fun updateDoors(delta: Float) {
+        if (controls.doorTapped && !mapOpen && doorSequence == 0) {
+            val car = if (onFoot) vehicleWithinReach() else grind
+            if (car == null) {
+                showHint("Too far from a car")
+            } else if (!onFoot && abs(car.speed) >= EXIT_MAX_SPEED) {
+                showHint("Slow down to open the door")
+            } else {
+                val doors = doorsOf(car)
+                if (doors.wantsOpen) doors.close() else doors.open()
+                if (closeCar === car) closeCar = null
+            }
+        }
+        val waiting = closeCar
+        if (waiting != null) {
+            closeTimer -= delta
+            if (closeTimer <= 0f) {
+                doorsOf(waiting).close()
+                closeCar = null
+            }
+        }
+        if (!onFoot && abs(grind.speed) >= EXIT_MAX_SPEED) doorsOf(grind).close()
+        if (onFoot && doorSequence == 0) {
+            closeDoorsOfFarCar(camry, camryDoors)
+            closeDoorsOfFarCar(truck, truckDoors)
+        }
+        camryDoors.update(delta)
+        truckDoors.update(delta)
+    }
+
+    private fun closeDoorsOfFarCar(car: CarController, doors: VehicleDoors) {
+        if (!doors.wantsOpen || car === closeCar) return
+        val dx = player.position.x - car.position.x
+        val dz = player.position.z - car.position.z
+        if (dx * dx + dz * dz > DOOR_AUTO_CLOSE_RANGE * DOOR_AUTO_CLOSE_RANGE) doors.close()
+    }
+
+    /** The inside of the car is placed like the car, then fitted to this car (scaled and lifted a little). */
+    private fun poseInterior(
+        car: CarController, interior: ModelInstance, scaleX: Float, scaleY: Float, scaleZ: Float, lift: Float, shiftZ: Float
+    ) {
+        interior.transform.setToRotation(Vector3.Y, car.yawDegrees)
+            .rotate(Vector3.X, car.pitchDegrees)
+            .rotate(Vector3.Z, car.rollDegrees)
+            .setTranslation(car.position.x, car.position.y, car.position.z)
+            .translate(0f, lift, shiftZ)
+            .scale(scaleX, scaleY, scaleZ)
+    }
+
+    /**
+     * Draws a vehicle. When you sit inside it (hood view) the body and wheels are left out and the inside is drawn
+     * instead; the doors are drawn only while they are open, so you see them swing out.
+     */
+    private fun renderVehicle(instance: ModelInstance, interior: ModelInstance, inside: Boolean, doors: VehicleDoors) {
+        for (i in 0 until instance.nodes.size) {
+            val node = instance.nodes.get(i)
+            val isDoor = node.id != null && node.id.startsWith("door_")
+            val visible = if (isDoor) !inside || doors.amount > 0.02f else !inside
+            for (j in 0 until node.parts.size) node.parts.get(j).enabled = visible
+        }
+        modelBatch.render(instance, environment)
+        if (inside) modelBatch.render(interior, environment)
     }
 
     /** An arrow at the top of the screen that points to the nearest house, drawn in the shape pass. */
@@ -929,6 +1063,7 @@ class LagosDriftGame : ApplicationAdapter() {
         danfoModel?.dispose()
         if (::homes.isInitialized) homes.dispose()
         if (::truckModel.isInitialized) truckModel.dispose()
+        if (::interiorModel.isInitialized) interiorModel.dispose()
         if (::guardModel.isInitialized) guardModel.dispose()
         if (::boyModel.isInitialized) boyModel.dispose()
         if (::chibiModel.isInitialized) chibiModel.dispose()
@@ -953,6 +1088,9 @@ class LagosDriftGame : ApplicationAdapter() {
         const val DOOR_WALK_TIME = 0.6f     // seconds to step out or in
         const val SEAT_SIDE = 0.35f         // seat position, metres left of the car centre
         const val ENTER_RANGE = 4.5f
+        const val DOOR_AUTO_CLOSE_RANGE = 9f  // an open door shuts by itself when you are further than this from the car
+        const val CLOSE_AFTER_EXIT = 1.6f     // seconds after you got out, the doors shut
+        const val CLOSE_AFTER_ENTER = 0.4f    // and after you got in
         const val HOME_ARRIVED = 30f        // closer than this to a gate: "you are here"
         const val CAR_EXIT_SIDE = 2.4f
         const val CAR_RADIUS = 1.1f

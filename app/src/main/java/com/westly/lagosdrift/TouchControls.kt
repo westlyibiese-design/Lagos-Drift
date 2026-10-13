@@ -31,6 +31,10 @@ class TouchControls {
     var actionTapped = false
         private set
 
+    /** True for one frame when the DOOR button is first pressed (opens or shuts the doors, nothing else). */
+    var doorTapped = false
+        private set
+
     /** While the big map is open only the MAP button is shown and used; the map reads the other touches. */
     var mapMode = false
 
@@ -97,16 +101,17 @@ class TouchControls {
     private val zoomInButton = Button("+")
     private val zoomOutButton = Button("-")
     private val actionButton = Button("EXIT")
+    private val doorButton = Button("DOOR")
     private val allButtons = listOf(
         leftButton, rightButton, gasButton, brakeButton, mapButton, cameraButton, zoomInButton, zoomOutButton,
-        actionButton
+        actionButton, doorButton
     )
 
     private val mapOnly = listOf(mapButton)
 
     // Walking shows only these: JUMP (in the gas button's place), the right-hand column and ENTER.
     private val footButtons = listOf(
-        gasButton, mapButton, cameraButton, zoomInButton, zoomOutButton, actionButton
+        gasButton, mapButton, cameraButton, zoomInButton, zoomOutButton, actionButton, doorButton
     )
     private val active: List<Button>
         get() = if (mapMode) mapOnly else if (onFoot) footButtons else allButtons
@@ -134,6 +139,7 @@ class TouchControls {
     private var cameraWasDown = false
     private var mapWasDown = false
     private var actionWasDown = false
+    private var doorWasDown = false
     private var lastPinchDistance = 0f
 
     fun layout(width: Int, height: Int, insetLeft: Float, insetRight: Float) {
@@ -162,6 +168,7 @@ class TouchControls {
         mapButton.place(columnX, h * 0.80f, smallR)
         actionButton.place(columnX - smallR * 2.5f, h * 0.80f, smallR)
         cameraButton.place(columnX, h * 0.65f, smallR)
+        doorButton.place(columnX - smallR * 2.5f, h * 0.65f, smallR)
         zoomInButton.place(columnX, h * 0.505f, tinyR)
         zoomOutButton.place(columnX, h * 0.385f, tinyR)
     }
@@ -299,6 +306,8 @@ class TouchControls {
         mapTapped = mapButton.pressed && !mapWasDown
         actionTapped = actionButton.pressed && !actionWasDown
         actionWasDown = actionButton.pressed
+        doorTapped = doorButton.pressed && !doorWasDown
+        doorWasDown = doorButton.pressed
         cameraWasDown = cameraButton.pressed
         mapWasDown = mapButton.pressed
     }
@@ -366,6 +375,7 @@ class TouchControls {
         label(batch, font, layout, cameraButton)
         font.data.setScale(textScale * 0.95f)
         label(batch, font, layout, actionButton)
+        label(batch, font, layout, doorButton)
         font.data.setScale(textScale * 1.6f)
         label(batch, font, layout, zoomInButton)
         label(batch, font, layout, zoomOutButton)

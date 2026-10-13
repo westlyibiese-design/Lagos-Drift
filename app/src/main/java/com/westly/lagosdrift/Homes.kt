@@ -130,8 +130,8 @@ class Homes(private val guardModel: Model, private val danfoModel: Model?) {
         obstacles.add(floatArrayOf(h.guardX, h.guardZ, GUARD_RADIUS))
 
         // The garage: the Silverado (drivable, placed by the game) at the first house, the Danfo at the second.
-        val gx = h.worldX(GARAGE_X, GARAGE_Z)
-        val gz = h.worldZ(GARAGE_X, GARAGE_Z)
+        val gx = h.worldX(GARAGE_X + PARK_SHIFT_X, GARAGE_Z)
+        val gz = h.worldZ(GARAGE_X + PARK_SHIFT_X, GARAGE_Z)
         if (first) {
             truckX = gx
             truckZ = gz
@@ -374,7 +374,8 @@ class Homes(private val guardModel: Model, private val danfoModel: Model?) {
         const val GUARD_RADIUS = 0.45f
         const val GARAGE_X = -22.5f
         const val GARAGE_Z = -3f
-        const val GARAGE_W = 7.4f
+        const val GARAGE_W = 11.6f          // room for two vehicles side by side
+        const val PARK_SHIFT_X = -2.7f      // the parked Silverado / Danfo stands in the left half of the garage
         const val GARAGE_D = 7f
         const val GARAGE_TOP = 2.6f
         const val DOOR_HALF_WIDTH = 1.6f

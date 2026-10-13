@@ -99,7 +99,7 @@ class PlayerController {
         }
 
         // The feet follow the road height, and a jump leaves it and comes back down.
-        val ground = RoadGround.carHeightAt(position.x, position.z, position.y, MAX_DROP)
+        val ground = RoadGround.carHeightAt(position.x, position.z, position.y, MAX_DROP, false)
         if (!ground.isNaN()) groundY = ground
         if (jump && grounded) verticalSpeed = JUMP_SPEED
         if (grounded) {

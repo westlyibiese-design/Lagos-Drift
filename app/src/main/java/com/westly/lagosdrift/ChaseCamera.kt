@@ -23,9 +23,13 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
     /** Extra closeness for the walking player (about 0.4); 1 when driving. */
     var distanceScale = 1f
 
-    /** Where the hood (driver's) view sits: metres behind the vehicle's middle, and height. */
+    /**
+     * Where the hood (driver's) view sits: metres behind the vehicle's middle, height, and metres to the right
+     * of the middle (negative = left, where the driver sits).
+     */
     var hoodBack = 0.15f
     var hoodHeight = 1.3f
+    var hoodSide = 0f
 
     /** While walking the camera keeps its own heading, so the stick can be read relative to the view. */
     var freeLook = false
@@ -62,6 +66,9 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
                 camera.fieldOfView = 72f
                 forward.set(0f, 0f, -1f).rotate(Vector3.Y, cameraYaw)
                 camera.position.set(carPosition).mulAdd(forward, -hoodBack)
+                // The right-hand side of the way we face is (-forward.z, forward.x).
+                camera.position.x += -forward.z * hoodSide
+                camera.position.z += forward.x * hoodSide
                 camera.position.y = carPosition.y + hoodHeight
                 lookTarget.set(carPosition).mulAdd(forward, 20f)
                 lookTarget.y = carPosition.y + 1.2f
@@ -108,6 +115,9 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
             }
         }
 
+        // Inside the car the dashboard is closer than a metre, so the near plane has to come in.
+        camera.near = if (mode == MODE_HOOD) HOOD_NEAR else NORMAL_NEAR
+
         // Never below the road under the camera.
         val ground = RoadGround.carHeightAt(camera.position.x, camera.position.z, carPosition.y + 3f, 100000f)
         if (!ground.isNaN() && camera.position.y < ground + MIN_GROUND_CLEARANCE) {
@@ -126,6 +136,8 @@ class ChaseCamera(private val camera: PerspectiveCamera) {
         const val MODE_ORBIT = 3
         const val MODE_COUNT = 4
         private const val MIN_GROUND_CLEARANCE = 0.5f
+        private const val NORMAL_NEAR = 1f
+        private const val HOOD_NEAR = 0.12f
         private const val TUNNEL_MAX_RISE = 5.2f     // the ceiling is about 7.7 m above the floor
         private const val TUNNEL_MAX_SIDE = 4f       // the walls are about 5.2 m from the middle
         val MODE_NAMES = arrayOf("Near", "Far", "Hood", "Orbit")

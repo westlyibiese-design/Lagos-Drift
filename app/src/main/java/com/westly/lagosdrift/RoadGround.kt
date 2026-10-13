@@ -525,7 +525,7 @@ object RoadGround {
      * road and the scanned tunnel floor (without rubble the car could not climb), then the fitted tunnel
      * floor where the scan has a hole, then the desert ground. [lastKind] says which one answered.
      */
-    fun carHeightAt(x: Float, z: Float, refY: Float, maxDrop: Float): Float {
+    fun carHeightAt(x: Float, z: Float, refY: Float, maxDrop: Float, rough: Boolean = true): Float {
         val dx = x - JOIN_X
         val dz = z - JOIN_Z
         val along = dx * TUNNEL_DIR_X + dz * TUNNEL_DIR_Z
@@ -552,7 +552,8 @@ object RoadGround {
         if (blocked(x, z)) return Float.NaN
         if (sampleIn(terrainPatches, x, z, refY, maxDrop, Float.MAX_VALUE)) {
             lastKind = SURFACE_TERRAIN
-            return sampleY + terrainRough(x, z)
+            // The car feels the rolling ground; a person on foot walks on the smooth surface.
+            return if (rough) sampleY + terrainRough(x, z) else sampleY
         }
         return Float.NaN
     }
