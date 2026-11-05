@@ -62,7 +62,9 @@ object RoadGround {
     // tunnel (sideways from the corridor axis) from the mouth to the end of the scanned floor.
     private const val VIRTUAL_SIDE_MIN = -2.2f
     private const val VIRTUAL_SIDE_MAX = 5.6f
-    private const val VIRTUAL_END = 705f
+    // It runs on to 716 m, past the start of the dirt strip at 712 m (see ZoneWorld), so there is no gap
+    // of bare air between the scanned floor and the forest where the car used to stop dead.
+    private const val VIRTUAL_END = 716f
 
     // Rubble taller than this above the fitted floor is not solid for the car (it drives through it).
     private const val RUBBLE_MAX = 1.0f

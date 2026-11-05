@@ -106,6 +106,18 @@ class CarController(
     private var lastSpeed = 0f
     private var accSm = 0f
 
+    // Never stuck: where the car was at the end of the last frame (to tell a push from an obstacle from a
+    // normal move), how long it has been asked to move without moving, and for how long it ignores pushes.
+    private var lastX = 0f
+    private var lastZ = 0f
+    private var hasLast = false
+    private var ghostTime = 0f
+    private var stuckTime = 0f
+    private var windowX = 0f
+    private var windowZ = 0f
+    private var windowTime = 0f
+    private var windowWanted = true
+
     /** Parks the vehicle somewhere, facing a direction, standing still. The height comes from [settleOnGround]. */
     fun place(x: Float, z: Float, yaw: Float) {
         position.x = x
@@ -126,6 +138,7 @@ class CarController(
         lastSpeed = 0f
         accSm = 0f
         impactEvent = 0f
+        resetStuckWatch()
     }
 
     /**
@@ -149,18 +162,137 @@ class CarController(
         if (sampleWheels(position.x, position.z, position.y + 0.3f)) {
             applyWheelHeights(0f)
         }
+        resetStuckWatch()
         return true
     }
 
     /** Called when the car hits something: multiplies the speed (0.5 = lose half). */
     fun bump(factor: Float) {
+        // While the car is freeing itself it ignores knocks, so nothing can hold it back.
+        if (ghostTime > 0f) return
         val lost = abs(speed) * (1f - factor)
         if (lost > 1f) impactEvent = max(impactEvent, lost * 1.2f)
         speed *= factor
     }
 
-    /** steerInput: -1 = left, +1 = right. */
+    /**
+     * steerInput: -1 = left, +1 = right.
+     *
+     * The car can never stay stuck. Three safeguards work together:
+     * 1. A push from a tree, a house, traffic or another vehicle that would shove a wheel off the ground
+     *    is refused, so nothing can push the car into a place where it has no ground.
+     * 2. When the driver holds gas or brake and the car does not move for about a second and a half, it
+     *    ignores pushes and knocks for a moment, so it drives out of whatever it is wedged in.
+     * 3. When even that does not free it, it is set on the nearest open ground.
+     */
     fun update(delta: Float, steerInput: Float, throttle: Boolean, brake: Boolean) {
+        val dt = min(delta, 0.05f)
+        if (dt <= 0f) return
+        if (ghostTime > 0f) ghostTime -= dt
+        refusePushesOffTheGround()
+        updateCore(delta, steerInput, throttle, brake)
+        watchForStuck(dt, throttle != brake)
+        lastX = position.x
+        lastZ = position.z
+        hasLast = true
+    }
+
+    private fun resetStuckWatch() {
+        hasLast = false
+        ghostTime = 0f
+        stuckTime = 0f
+        windowTime = 0f
+        windowWanted = true
+    }
+
+    /**
+     * Trees, houses, traffic and the other vehicle move the car straight after each frame. If such a push
+     * would leave a wheel without ground (or the car is freeing itself), it is undone. A big jump is a
+     * teleport (a new world, a restart), not a push, and is accepted.
+     */
+    private fun refusePushesOffTheGround() {
+        if (!hasLast) return
+        val dx = position.x - lastX
+        val dz = position.z - lastZ
+        val d2 = dx * dx + dz * dz
+        if (d2 < 1e-8f || d2 > TELEPORT_DISTANCE * TELEPORT_DISTANCE) return
+        if (ghostTime > 0f || !sampleWheels(position.x, position.z, groundRef)) {
+            position.x = lastX
+            position.z = lastZ
+        }
+    }
+
+    /** Counts how long the driver has been asking the car to move while it stays put, and frees it. */
+    private fun watchForStuck(dt: Float, wantsMove: Boolean) {
+        if (!wantsMove) windowWanted = false
+        if (windowTime == 0f) {
+            windowX = position.x
+            windowZ = position.z
+        }
+        windowTime += dt
+        if (windowTime < STUCK_WINDOW) return
+        val mx = position.x - windowX
+        val mz = position.z - windowZ
+        if (windowWanted && mx * mx + mz * mz < STUCK_MOVE * STUCK_MOVE) {
+            stuckTime += windowTime
+        } else {
+            stuckTime = 0f
+        }
+        windowTime = 0f
+        windowWanted = true
+        if (stuckTime >= FREE_AFTER) ghostTime = max(ghostTime, GHOST_SECONDS)
+        if (stuckTime >= PLACE_AFTER) {
+            if (placeOnOpenGround()) ghostTime = max(ghostTime, GHOST_SECONDS)
+            stuckTime = 0f
+        }
+    }
+
+    /**
+     * The last resort: puts the car on the nearest spot with open ground all around it (the four wheels and
+     * a ring of points 3 m out). Falls back to the last place it was fully on the ground.
+     */
+    private fun placeOnOpenGround(): Boolean {
+        var r = RESCUE_MIN_RADIUS
+        while (r <= RESCUE_RADIUS) {
+            val steps = min(64, 8 * r)
+            for (k in 0 until steps) {
+                val a = k * 6.2831855f / steps
+                val px = position.x + cos(a) * r
+                val pz = position.z + sin(a) * r
+                if (!sampleWheels(px, pz, groundRef)) continue
+                var open = true
+                for (j in 0 until 8) {
+                    val b = j * 0.7853982f
+                    val h = RoadGround.carHeightAt(px + cos(b) * OPEN_RING, pz + sin(b) * OPEN_RING, groundRef, MAX_DROP)
+                    if (h.isNaN()) {
+                        open = false
+                        break
+                    }
+                }
+                if (!open) continue
+                // The wheel heights of this spot are still the last ones read.
+                position.x = px
+                position.z = pz
+                speed = 0f
+                applyWheelHeights(0f)
+                return true
+            }
+            r++
+        }
+        if (hasGood) {
+            position.set(goodX, goodY, goodZ)
+            groundRef = goodY
+            yawDegrees = goodYaw
+            speed = 0f
+            vy = 0f
+            isAirborne = false
+            if (sampleWheels(position.x, position.z, groundRef)) applyWheelHeights(0f)
+            return true
+        }
+        return false
+    }
+
+    private fun updateCore(delta: Float, steerInput: Float, throttle: Boolean, brake: Boolean) {
         val dt = min(delta, 0.05f)
         if (dt <= 0f) return
 
@@ -519,6 +651,17 @@ class CarController(
         const val RECOVER_RADIUS = 20       // metres searched for a spot on the ground when a wheel is off it
         const val RECOVER_SPEED = 8f        // metres per second the car slides back onto the ground
         const val SPAWN_SEARCH_RADIUS = 15f
+
+        // Never stuck.
+        const val TELEPORT_DISTANCE = 3f    // a move bigger than this in one frame is not a push
+        const val STUCK_WINDOW = 0.5f       // seconds per check
+        const val STUCK_MOVE = 0.3f         // metres in one check below which the car counts as not moving
+        const val FREE_AFTER = 1.5f         // seconds of not moving, with gas or brake held, before it drives through pushes
+        const val PLACE_AFTER = 3.5f        // seconds before it is set on open ground
+        const val GHOST_SECONDS = 1.5f
+        const val RESCUE_MIN_RADIUS = 3
+        const val RESCUE_RADIUS = 25
+        const val OPEN_RING = 3f
         const val HIGH_REFERENCE = 10000f   // "any height": picks the highest surface under the car
 
         // Surfaces: the share of the top speed that is allowed, and how rough they are (0..1).
