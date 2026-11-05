@@ -9,4 +9,13 @@ object WorldLimits {
     const val MAX_X = 1000f
     const val MIN_Z = -2100f
     const val MAX_Z = 300f
+
+    /**
+     * Where a vehicle may be: the map area above plus the forest and the island past the tunnel.
+     * (The map picture keeps using the numbers above, so it does not change size.)
+     */
+    const val PLAY_MIN_X = -1500f
+    const val PLAY_MAX_X = 1000f
+    const val PLAY_MIN_Z = -3300f
+    const val PLAY_MAX_Z = 300f
 }

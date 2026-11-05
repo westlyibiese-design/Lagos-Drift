@@ -271,11 +271,11 @@ class CarController(
         if (sampleWheels(position.x, position.z, groundRef)) applyWheelHeights(dt, accSm, yawRate)
 
         // Very large safety clamp: nobody can leave the map.
-        if (position.x < WorldLimits.MIN_X || position.x > WorldLimits.MAX_X ||
-            position.z < WorldLimits.MIN_Z || position.z > WorldLimits.MAX_Z
+        if (position.x < WorldLimits.PLAY_MIN_X || position.x > WorldLimits.PLAY_MAX_X ||
+            position.z < WorldLimits.PLAY_MIN_Z || position.z > WorldLimits.PLAY_MAX_Z
         ) {
-            position.x = position.x.coerceIn(WorldLimits.MIN_X, WorldLimits.MAX_X)
-            position.z = position.z.coerceIn(WorldLimits.MIN_Z, WorldLimits.MAX_Z)
+            position.x = position.x.coerceIn(WorldLimits.PLAY_MIN_X, WorldLimits.PLAY_MAX_X)
+            position.z = position.z.coerceIn(WorldLimits.PLAY_MIN_Z, WorldLimits.PLAY_MAX_Z)
             speed *= 0.5f
         }
     }

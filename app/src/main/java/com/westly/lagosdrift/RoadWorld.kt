@@ -112,7 +112,9 @@ class RoadWorld(fogR: Float, fogG: Float, fogB: Float) {
         var e = root.child
         while (e != null) {
             val file = e.getString("file")
-            if (file != "sky.g3db") {
+            // The two huge sand triangles that lay over the ground past the tunnel's end are left out:
+            // the forest and the island (ZoneWorld) are there now, with their own ground.
+            if (file != "sky.g3db" && file != "road_047_044.g3db" && file != "road_050_043.g3db") {
                 val mn = e.get("min")
                 val mx = e.get("max")
                 val minX = mn.getFloat(0)

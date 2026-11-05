@@ -84,6 +84,9 @@ class LagosDriftGame : ApplicationAdapter() {
     private lateinit var chibiModel: Model
     private lateinit var homes: Homes
     private lateinit var passersby: Passersby
+    private lateinit var zones: ZoneWorld
+    private lateinit var zombies: ZombieManager
+    private var lastPlace: String? = null
     private val homeMarkers = ArrayList<Vector3>()
     private var truckRestored = false
     private var savedTruckY = Float.NaN
@@ -197,6 +200,13 @@ class LagosDriftGame : ApplicationAdapter() {
             return
         }
         passersby = Passersby(boyModel, chibiModel)
+        try {
+            zones = ZoneWorld()
+        } catch (e: Exception) {
+            fatalError = "Could not load the forest and the island: $e"
+            return
+        }
+        zombies = ZombieManager(guardModel, zones)
         for (i in 0 until homes.count) homeMarkers.add(homes.gate(i, Vector3()))
         // The Silverado starts in the garage of the first house, unless the saved game says where it is.
         if (!truckRestored) truck.place(homes.truckX, homes.truckZ, homes.truckYaw)
@@ -370,6 +380,8 @@ class LagosDriftGame : ApplicationAdapter() {
                 walkOnFoot(delta)
                 pushPlayerOutOfCar()
                 homes.pushPlayer(player.position, PLAYER_RADIUS)
+                zones.pushPlayer(player.position, PLAYER_RADIUS)
+                zombies.pushOut(player.position, PLAYER_RADIUS)
                 passersby.pushOut(player.position, PLAYER_RADIUS)
             }
 
@@ -379,13 +391,29 @@ class LagosDriftGame : ApplicationAdapter() {
             if (grind === truck) {
                 traffic.collide(grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
                 if (!onFoot) homes.pushCar(grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
+                if (!onFoot) zones.pushCar(grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
             } else {
                 traffic.collide(grind)
                 if (!onFoot) homes.pushCar(grind, CAR_RADIUS, CAR_OFFSET)
+                if (!onFoot) zones.pushCar(grind, CAR_RADIUS, CAR_OFFSET)
             }
             collideVehicles()
             if (onFoot && doorSequence == 0) traffic.pushOut(player.position, PLAYER_RADIUS)
             passersby.update(delta, subject.x, subject.y, subject.z)
+
+            // The forest: zombies come after you on foot; a fast car knocks them down.
+            if (grind === truck) {
+                zombies.update(delta, onFoot, player.position, grind, SilveradoModelFactory.CAR_RADIUS, SilveradoModelFactory.CAR_OFFSET)
+            } else {
+                zombies.update(delta, onFoot, player.position, grind, CAR_RADIUS, CAR_OFFSET)
+            }
+            if (zombies.takePlayerDown()) startAgainAtForestEntrance()
+            val place = zones.nameAt(focus.x, focus.z)
+            if (place != lastPlace) {
+                if (place == "FOREST") showHint("FOREST - the trees are solid, and there are zombies. Keep moving", 5f)
+                if (place == "ISLAND") showHint("You made it through the forest: the ISLAND", 5f)
+                lastPlace = place
+            }
         }
 
         // The sound follows the car: the engine, the tyres, rough ground, knocks, and the echo in the tunnel.
@@ -464,7 +492,9 @@ class LagosDriftGame : ApplicationAdapter() {
         renderVehicle(carInstance, camryInterior, insideCar && grind === camry, camryDoors)
         renderVehicle(truckInstance, truckInterior, insideCar && grind === truck, truckDoors)
         homes.render(modelBatch, environment, camera)
+        zones.render(modelBatch, environment, camera)
         passersby.render(modelBatch, environment, camera)
+        zombies.render(modelBatch, environment, camera)
         if (onFoot && viewMode != ChaseCamera.MODE_HOOD) modelBatch.render(playerInstance, environment)
         modelBatch.end()
 
@@ -498,6 +528,7 @@ class LagosDriftGame : ApplicationAdapter() {
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
         controls.drawShapes(shapeRenderer)
         if (!mapOpen) drawHomeArrow()
+        if (!mapOpen) zombies.drawShapes(shapeRenderer, screenWidth, screenHeight, margin)
         shapeRenderer.end()
 
         // Text.
@@ -524,8 +555,20 @@ class LagosDriftGame : ApplicationAdapter() {
             creditLine(TUNNEL_CREDIT, 5.8f)
             creditLine(SilveradoModelFactory.CREDIT, 7.4f)
             creditLine(InteriorModelFactory.CREDIT, 9.0f)
+            creditLine(ZoneWorld.FOREST_CREDIT, 10.6f)
+            creditLine(ZoneWorld.ISLAND_CREDIT, 12.2f)
             font.data.setScale(textScale)
             font.setColor(1f, 1f, 1f, 0.8f)
+
+            // The health bar's label (the bar itself is drawn with the buttons).
+            if (zombies.hudVisible) {
+                glyphLayout.setText(font, zombies.hudText())
+                font.draw(
+                    spriteBatch, glyphLayout,
+                    screenWidth / 2f - glyphLayout.width / 2f,
+                    zombies.barY(screenHeight, margin) + screenHeight * 0.022f + glyphLayout.height * 1.8f
+                )
+            }
 
             // Under the small map: the road picture is still being made, or the exact reason it could not be.
             if (!mapBaker.ready) {
@@ -787,7 +830,23 @@ class LagosDriftGame : ApplicationAdapter() {
 
     /** "GLEN CANYON ROAD" on the open road, "TUNNEL" inside the Futatsugoya tunnel. */
     private fun placeText(): String = homes.nameNear(focus.x, focus.z)
+        ?: zones.nameAt(focus.x, focus.z)
         ?: if (RoadGround.inTunnel(focus.x, focus.z)) "TUNNEL" else "GLEN CANYON ROAD"
+
+    /** The zombies got you: back to the start of the forest road, on foot beside the car, with full health. */
+    private fun startAgainAtForestEntrance() {
+        val ex = zones.entranceX
+        val ez = zones.entranceZ
+        grind.place(ex, ez, SPAWN_YAW)
+        grind.settleOnGround(Float.NaN)
+        if (onFoot) {
+            val rad = SPAWN_YAW * 0.017453292f
+            player.position.set(ex + kotlin.math.cos(rad) * 3f, player.position.y, ez - kotlin.math.sin(rad) * 3f)
+            player.settleOnGround(Float.NaN)
+        }
+        zombies.reset()
+        showHint("The zombies got you - back at the start of the forest", 4f)
+    }
 
     /** Once the road around the start is loaded: puts the car (and the player, if walking) on the road. */
     private fun settleOnGround() {
@@ -1015,8 +1074,8 @@ class LagosDriftGame : ApplicationAdapter() {
             p.getFloat("player_x"), p.getFloat("player_z"), p.getFloat("player_yaw")
         )
         for (v in values) if (v.isNaN() || v.isInfinite()) return false
-        if (values[0] < WorldLimits.MIN_X || values[0] > WorldLimits.MAX_X ||
-            values[1] < WorldLimits.MIN_Z || values[1] > WorldLimits.MAX_Z
+        if (values[0] < WorldLimits.PLAY_MIN_X || values[0] > WorldLimits.PLAY_MAX_X ||
+            values[1] < WorldLimits.PLAY_MIN_Z || values[1] > WorldLimits.PLAY_MAX_Z
         ) return false
 
         // The heights are read when the road is loaded; a saved height tells the levels apart on bridges.
@@ -1028,7 +1087,7 @@ class LagosDriftGame : ApplicationAdapter() {
             val tz = p.getFloat("truck_z")
             val tyaw = p.getFloat("truck_yaw")
             if (!tx.isNaN() && !tz.isNaN() && !tyaw.isNaN() &&
-                tx >= WorldLimits.MIN_X && tx <= WorldLimits.MAX_X && tz >= WorldLimits.MIN_Z && tz <= WorldLimits.MAX_Z
+                tx >= WorldLimits.PLAY_MIN_X && tx <= WorldLimits.PLAY_MAX_X && tz >= WorldLimits.PLAY_MIN_Z && tz <= WorldLimits.PLAY_MAX_Z
             ) {
                 truck.place(tx, tz, tyaw)
                 savedTruckY = p.getFloat("truck_y", Float.NaN)
@@ -1062,6 +1121,7 @@ class LagosDriftGame : ApplicationAdapter() {
         mapBaker.dispose()
         danfoModel?.dispose()
         if (::homes.isInitialized) homes.dispose()
+        if (::zones.isInitialized) zones.dispose()
         if (::truckModel.isInitialized) truckModel.dispose()
         if (::interiorModel.isInitialized) interiorModel.dispose()
         if (::guardModel.isInitialized) guardModel.dispose()
