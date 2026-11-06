@@ -117,6 +117,7 @@ class CarController(
     private var windowZ = 0f
     private var windowTime = 0f
     private var windowWanted = true
+    private var intent = 1f     // +1 while the driver asks to go forward, -1 backward
 
     /** Parks the vehicle somewhere, facing a direction, standing still. The height comes from [settleOnGround]. */
     fun place(x: Float, z: Float, yaw: Float) {
@@ -191,6 +192,7 @@ class CarController(
         if (ghostTime > 0f) ghostTime -= dt
         refusePushesOffTheGround()
         updateCore(delta, steerInput, throttle, brake)
+        if (throttle && !brake) intent = 1f else if (brake && !throttle) intent = -1f
         watchForStuck(dt, throttle != brake)
         lastX = position.x
         lastZ = position.z
@@ -242,9 +244,37 @@ class CarController(
         windowWanted = true
         if (stuckTime >= FREE_AFTER) ghostTime = max(ghostTime, GHOST_SECONDS)
         if (stuckTime >= PLACE_AFTER) {
-            if (placeOnOpenGround()) ghostTime = max(ghostTime, GHOST_SECONDS)
+            if (placeAhead() || placeOnOpenGround()) ghostTime = max(ghostTime, GHOST_SECONDS)
             stuckTime = 0f
         }
+    }
+
+    /**
+     * First choice when the car is held: carries it forward (or backward, when reversing) to the nearest
+     * ground in the direction the driver wants to go, past a crack, a wall or whatever holds it.
+     */
+    private fun placeAhead(): Boolean {
+        val rad = yawDegrees * 0.017453292f
+        val fx = -sin(rad) * intent
+        val fz = -cos(rad) * intent
+        val rx = cos(rad)
+        val rz = -sin(rad)
+        var d = AHEAD_MIN
+        while (d <= AHEAD_MAX) {
+            for (k in 0 until 3) {
+                val side = if (k == 0) 0f else if (k == 1) 1.2f else -1.2f
+                val px = position.x + fx * d + rx * side
+                val pz = position.z + fz * d + rz * side
+                if (!sampleWheels(px, pz, groundRef)) continue
+                position.x = px
+                position.z = pz
+                speed = 0f
+                applyWheelHeights(0f)
+                return true
+            }
+            d += 1f
+        }
+        return false
     }
 
     /**
@@ -657,8 +687,10 @@ class CarController(
         const val STUCK_WINDOW = 0.5f       // seconds per check
         const val STUCK_MOVE = 0.3f         // metres in one check below which the car counts as not moving
         const val FREE_AFTER = 1.5f         // seconds of not moving, with gas or brake held, before it drives through pushes
-        const val PLACE_AFTER = 3.5f        // seconds before it is set on open ground
+        const val PLACE_AFTER = 3.0f        // seconds before it is set on open ground
         const val GHOST_SECONDS = 1.5f
+        const val AHEAD_MIN = 2.5f          // how far ahead the rescue looks for ground (metres)
+        const val AHEAD_MAX = 14f
         const val RESCUE_MIN_RADIUS = 3
         const val RESCUE_RADIUS = 25
         const val OPEN_RING = 3f

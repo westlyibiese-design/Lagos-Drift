@@ -201,6 +201,9 @@ class ZoneWorld {
             material.set(IntAttribute.createCullFace(GL20.GL_NONE))
             // 2 = cut-out leaves (no sorting needed; the alpha number is the cut-off), 1 = see-through.
             if (blend == 2) {
+                // libGDX applies the cut-off only to a blended material, so the leaves need both. Without the
+                // blending the see-through parts of the leaf picture were drawn solid white.
+                material.set(BlendingAttribute(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA, 1f))
                 material.set(FloatAttribute.createAlphaTest(a.coerceIn(0.05f, 0.9f)))
             } else if (blend == 1) {
                 material.set(BlendingAttribute(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA, a.coerceIn(0.2f, 1f)))

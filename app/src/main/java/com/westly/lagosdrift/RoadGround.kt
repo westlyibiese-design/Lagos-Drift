@@ -52,6 +52,12 @@ object RoadGround {
     private const val EDGE_TOLERANCE = 0.004f
     private const val NO_LIMIT = 100000f
 
+    // Cracks in the ground the car can cross: how far to look to each side, how different the two heights may be.
+    private const val GAP_REACH = 1.6f
+    private const val GAP_MAX_STEP = 0.8f
+    private val GAP_DIR_X = floatArrayOf(1f, 0f, 0.70710677f, 0.70710677f)
+    private val GAP_DIR_Z = floatArrayOf(0f, 1f, 0.70710677f, -0.70710677f)
+
     private const val KIND_NONE = 0
     private const val KIND_GLEN = 1
     private const val KIND_TUNNEL = 2
@@ -528,6 +534,33 @@ object RoadGround {
      * floor where the scan has a hole, then the desert ground. [lastKind] says which one answered.
      */
     fun carHeightAt(x: Float, z: Float, refY: Float, maxDrop: Float, rough: Boolean = true): Float {
+        val h = carHeightRaw(x, z, refY, maxDrop, rough)
+        if (!h.isNaN()) return h
+        return bridgeGap(x, z, refY, maxDrop)
+    }
+
+    /**
+     * A thin crack between two pieces of ground (where two chunks or the forest and the island meet) is not a
+     * wall. When there is ground on both sides of the spot, within [GAP_REACH] metres along any of four lines,
+     * and at about the same height, the spot counts as ground at the middle height. A real edge (ground on one
+     * side only) and a wall box (see [addBlock]) still stop the car.
+     */
+    private fun bridgeGap(x: Float, z: Float, refY: Float, maxDrop: Float): Float {
+        if (blocked(x, z)) return Float.NaN
+        for (k in 0 until 4) {
+            val dx = GAP_DIR_X[k] * GAP_REACH
+            val dz = GAP_DIR_Z[k] * GAP_REACH
+            val a = carHeightRaw(x + dx, z + dz, refY, maxDrop, false)
+            if (a.isNaN()) continue
+            val b = carHeightRaw(x - dx, z - dz, refY, maxDrop, false)
+            if (b.isNaN()) continue
+            if (abs(a - b) > GAP_MAX_STEP) continue
+            return (a + b) * 0.5f
+        }
+        return Float.NaN
+    }
+
+    private fun carHeightRaw(x: Float, z: Float, refY: Float, maxDrop: Float, rough: Boolean): Float {
         val dx = x - JOIN_X
         val dz = z - JOIN_Z
         val along = dx * TUNNEL_DIR_X + dz * TUNNEL_DIR_Z
